@@ -5,48 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>collabosm</title>
 <link rel="stylesheet" href="styles.css" />
+<style>
+  .home { max-width: 760px; margin: 8vh auto; padding: 0 20px; }
+  .home h1 { margin: 0 0 6px; font-size: 26px; }
+  .home p.sub { color: var(--dim); margin: 0 0 28px; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { display: block; text-decoration: none; color: var(--fg); background: var(--panel);
+          border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .card:hover { border-color: var(--accent); }
+  .card h2 { margin: 0 0 6px; font-size: 17px; }
+  .card span { color: var(--dim); font-size: 13px; }
+  .card .tag { display: inline-block; margin-top: 12px; font-size: 11px; color: var(--dim);
+               border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; }
+</style>
 </head>
 <body>
-<div id="app">
-  <aside>
-    <div class="brand">
-      <strong>collabosm</strong>
-      <span id="status" class="dot" title="checking"></span>
-    </div>
-    <button id="new" class="primary">New conversation</button>
-    <ul id="list"></ul>
-    <div class="foot">
-      <button id="export" class="ghost">Export</button>
-      <button id="import" class="ghost">Import</button>
-      <input id="file" type="file" accept="application/json" hidden />
-    </div>
-  </aside>
-
-  <main>
-    <header>
-      <div class="spacer"></div>
-      <label>dialect
-        <select id="dialect">
-          <option value="responses">responses</option>
-          <option value="chat">chat completions</option>
-        </select>
-      </label>
-      <label>model
-        <input id="model" spellcheck="false" />
-      </label>
-      <span id="endpoint" class="endpoint"></span>
-      <button id="stop" class="danger" disabled>Stop</button>
-    </header>
-
-    <section id="messages"></section>
-    <div id="metrics" class="metrics" title="measured by the local client while the stream passes; the API has no such field"></div>
-
-    <footer>
-      <textarea id="prompt" rows="3" placeholder="Message — Enter to send, Shift+Enter for a newline"></textarea>
-      <button id="send" class="primary">Send</button>
-    </footer>
-  </main>
+<div class="home">
+  <h1>collabosm</h1>
+  <p class="sub">One endpoint, two windows: chat with the model, or watch what it is doing.</p>
+  <div class="cards">
+    <a class="card" href="chat">
+      <h2>Chat</h2>
+      <span>Conversations with the model, streamed. Thinking shows collapsed.</span>
+      <div class="tag">/chat</div>
+    </a>
+    <a class="card" href="status">
+      <h2>Status &amp; metrics</h2>
+      <span>Endpoint state, live generation, and measured prefill / decode / ttft per turn.</span>
+      <div class="tag">/status</div>
+    </a>
+  </div>
 </div>
-<script src="app.js"></script>
 </body>
 </html>

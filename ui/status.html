@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>collabosm — status</title>
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 22px 20px 40px; }
+  h1 { font-size: 20px; margin: 0 0 2px; display: flex; align-items: center; gap: 10px; }
+  p.sub { color: var(--dim); margin: 0 0 20px; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .card .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .card .v { font-size: 15px; margin-top: 4px; font-family: ui-monospace, Consolas, monospace;
+             overflow-wrap: anywhere; }
+  .big { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
+  .big .card .v { font-size: 26px; }
+  .unit { color: var(--dim); font-size: 12px; }
+  .live { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px;
+          background: var(--panel); color: var(--dim); font-family: ui-monospace, Consolas, monospace;
+          font-size: 12.5px; }
+  .live.busy { border-color: var(--accent); color: var(--fg); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12.5px;
+          font-family: ui-monospace, Consolas, monospace; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--dim); font-weight: 500; }
+  .badge { font-size: 10px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px;
+           color: var(--dim); margin-left: 6px; }
+  .note { color: var(--dim); font-size: 12px; margin-top: 18px; line-height: 1.6; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>collabosm · status <span id="dot" class="dot" title="checking"></span></h1>
+  <p class="sub">Measured locally by the client as the stream passes. <a href="chat">Open chat &rarr;</a></p>
+
+  <div class="grid" id="facts"></div>
+
+  <div class="live" id="live">idle</div>
+
+  <div class="big" id="last"></div>
+
+  <h2 style="font-size:14px;margin:22px 0 0;color:var(--dim)">Recent turns</h2>
+  <table>
+    <thead><tr><th>time</th><th>dialect</th><th>ttft</th><th>prefill</th><th>decode</th>
+    <th>in</th><th>out</th><th>total</th></tr></thead>
+    <tbody id="turns"></tbody>
+  </table>
+
+  <p class="note">
+    prefill ≈ prompt_tokens / time-to-first-token (includes queueing) · decode ≈ output_tokens /
+    (total − ttft). Token counts come from the upstream's <code>usage</code> when it sends one and are
+    marked <span class="badge">est</span> otherwise. A non-streamed turn reports no rates at all,
+    because without a first token there is no prefill/decode boundary to measure.
+  </p>
+</div>
+<script src="status.js"></script>
+</body>
+</html>

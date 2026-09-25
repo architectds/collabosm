@@ -246,6 +246,35 @@ injects a bearer key would let any web page you happen to visit spend your GPU t
 UIs do not need it (they call upstream from their own backend); if a browser-hosted UI ever does,
 add an explicit origin allowlist, not a wildcard.
 
+### Two windows, named
+
+The client serves three pages, and the launcher opens the two that matter so it is
+obvious at a glance which is which:
+
+```bash
+python collabosm.py start       # start the client if needed, then open both windows
+python collabosm.py startup     # do the same at every login (Startup folder shortcut)
+python collabosm.py startup --remove
+```
+
+| page | title | what it is |
+|---|---|---|
+| `/` | `collabosm` | a landing page with both entries, for when you open it by hand |
+| `/chat` | `collabosm — chat` | conversations, streamed, thinking collapsed |
+| `/status` | `collabosm — status` | endpoint state, live generation, and measured prefill / decode / ttft |
+
+`start` is deliberately tolerant of an unconfigured or unreachable endpoint: the
+client comes up anyway so the status page can say *what* is missing. Bringing the
+A100 up or down stays with `scripts/up.sh` / `scripts/down.sh`; this client never
+spends money on its own.
+
+If you would rather chat in Open WebUI, point the chat window elsewhere and keep
+this dashboard:
+
+```bash
+python collabosm.py config --chat-url http://127.0.0.1:8080
+```
+
 ### The metrics contract
 
 The OpenAI protocol has no field for prefill or decode throughput, so no off-the-shelf UI can show

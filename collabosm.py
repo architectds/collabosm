@@ -25,6 +25,8 @@ import hashlib
 import http.client
 import json
 import os
+import socket
+import subprocess
 import sys
 import tarfile
 import threading
@@ -247,8 +249,11 @@ def resolve(args):
             "no endpoint configured.\n"
             "  python %s config --init --endpoint https://<host>/v1\n"
             "or pass --endpoint, or set COLLABOSM_ENDPOINT." % os.path.basename(sys.argv[0]))
+    chat_url = (getattr(args, "chat_url", None)
+                or os.environ.get("COLLABOSM_CHAT_URL")
+                or cfg.get("chat_url") or "")
     return {"endpoint": endpoint, "api_key": api_key, "dialect": dialect,
-            "model": model, "ui_dir": None}
+            "model": model, "ui_dir": None, "chat_url": chat_url}
 
 
 def default_ui_dir():
@@ -290,10 +295,14 @@ class Proxy(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     # --- static -----------------------------------------------------------
+    # Two named windows, so it is obvious which one is which.
+    PAGES = {"/": "index.html", "/index.html": "index.html",
+             "/chat": "chat.html", "/chat/": "chat.html",
+             "/status": "status.html", "/status/": "status.html"}
+
     def _static_path(self):
-        rel = urllib.parse.urlparse(self.path).path
-        if rel in ("/", "/index.html"):
-            rel = "/index.html"
+        path = urllib.parse.urlparse(self.path).path
+        rel = self.PAGES.get(path, path)
         rel = os.path.normpath(rel).lstrip("/\\")
         if rel.startswith("..") or os.path.isabs(rel):
             return None
@@ -324,14 +333,18 @@ class Proxy(BaseHTTPRequestHandler):
         if self.path.startswith("/local/metrics"):
             return self._json(200, METRICS.snapshot())
         if self.path.startswith("/health"):
+            # ok means "the client is up", not "the endpoint works": with no
+            # endpoint configured the page must still render and say so.
             return self._json(200, {"ok": True,
                                     "endpoint": self.cfg["endpoint"],
+                                    "configured": bool(self.cfg["endpoint"]),
                                     "dialect": self.cfg["dialect"],
                                     "ui_dir": self.cfg["ui_dir"]})
         if self.path.startswith("/local/config"):
             # Read-only, non-secret: what the page needs to label itself.
             return self._json(200, {
                 "endpoint": self.cfg["endpoint"],
+                "configured": bool(self.cfg["endpoint"]),
                 "dialect": self.cfg["dialect"],
                 "model": self.cfg["model"],
                 "has_key": bool(self.cfg["api_key"]),
@@ -466,7 +479,13 @@ def cmd_config(args):
 
 
 def cmd_ui(args):
+    # Tests and a cold boot both need this to run before an endpoint exists, so
+    # the status page can say "nothing configured" rather than the client refusing
+    # to start at all.
+    args.allow_no_endpoint = True
     cfg = resolve(args)
+    if not cfg["endpoint"]:
+        print("no endpoint configured: /v1 requests will return 503 until one is set")
     ui_dir = args.ui_dir or default_ui_dir()
     if not os.path.isdir(ui_dir):
         raise SystemExit("no UI bundle at %s\n  run: python %s update-ui"
@@ -624,6 +643,138 @@ def cmd_update_ui(args):
     return 0
 
 
+# --------------------------------------------------------------------------- startup
+def _port_open(host, port, timeout=0.4):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _healthy(base, timeout=2.0):
+    try:
+        with urllib.request.urlopen(base + "/health", timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+CHROME_PATHS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser",
+]
+
+
+def find_chrome():
+    for p in CHROME_PATHS:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def open_window(url):
+    """One window per URL, not one tab: the two pages are different jobs."""
+    chrome = find_chrome()
+    if chrome:
+        try:
+            subprocess.Popen([chrome, "--new-window", url],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return "chrome"
+        except Exception:
+            pass
+    import webbrowser
+    webbrowser.open_new(url)
+    return "browser"
+
+
+def cmd_start(args):
+    """Make sure the proxy is up, then open the status and chat windows.
+
+    Deliberately tolerant of a missing endpoint: at boot the client should come up
+    anyway, so the status page can say "nothing configured" instead of nothing at
+    all happening.
+    """
+    args.allow_no_endpoint = True
+    cfg = resolve(args)
+    if not cfg["endpoint"]:
+        print("no endpoint configured yet -- the client will start and say so.\n"
+              "  set one with: python %s config --endpoint <url> --api-key <key>"
+              % os.path.basename(sys.argv[0]))
+    base = "http://%s:%d" % (args.host, args.port)
+
+    if not _healthy(base):
+        spawn = [sys.executable, os.path.abspath(__file__), "ui",
+                 "--host", args.host, "--port", str(args.port)]
+        for flag, val in (("--dialect", cfg["dialect"]), ("--model", cfg["model"])):
+            if val:
+                spawn += [flag, val]
+        if args.endpoint:
+            spawn += ["--endpoint", args.endpoint]
+        env = dict(os.environ)
+        if cfg["api_key"]:
+            # Through the environment, not argv: a key on a command line is
+            # visible to anything that can list processes.
+            env["COLLABOSM_API_KEY"] = cfg["api_key"]
+        kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "env": env}
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x00000008 | 0x00000200   # DETACHED | NEW_GROUP
+        else:
+            kwargs["start_new_session"] = True
+        print("starting the client in the background…")
+        subprocess.Popen(spawn, **kwargs)
+        for _ in range(40):
+            if _healthy(base):
+                break
+            time.sleep(0.25)
+        else:
+            raise SystemExit("the client did not come up; run 'python %s ui' to see why"
+                             % os.path.basename(sys.argv[0]))
+    else:
+        print("client already running on %s" % base)
+
+    status_url = base + "/status"
+    chat_url = cfg["chat_url"] or (base + "/chat")
+    print("chat   : %s" % chat_url)
+    print("status : %s" % status_url)
+    if args.no_open:
+        return 0
+    open_window(status_url)
+    time.sleep(0.4)
+    open_window(chat_url)
+    return 0
+
+
+def cmd_startup(args):
+    """Put a shortcut in the per-user Startup folder (or autostart dir)."""
+    script = os.path.abspath(__file__)
+    if os.name == "nt":
+        d = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows",
+                         "Start Menu", "Programs", "Startup")
+        path = os.path.join(d, "collabosm.cmd")
+        body = '@echo off\r\n"%s" "%s" start\r\n' % (sys.executable, script)
+    else:
+        d = os.path.expanduser("~/.config/autostart")
+        path = os.path.join(d, "collabosm.desktop")
+        body = ("[Desktop Entry]\nType=Application\nName=collabosm\n"
+                'Exec="%s" "%s" start\nX-GNOME-Autostart-enabled=true\n' % (sys.executable, script))
+    if args.remove:
+        if os.path.exists(path):
+            os.remove(path)
+            print("removed %s" % path)
+        else:
+            print("nothing installed at %s" % path)
+        return 0
+    os.makedirs(d, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(body)
+    print("installed %s" % path)
+    print("logs on, collabosm will start the client and open both windows.")
+    return 0
+
+
 # --------------------------------------------------------------------------- main
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="collabosm", description=__doc__,
@@ -635,6 +786,7 @@ def main(argv=None):
         p.add_argument("--api-key", help="bearer key (or COLLABOSM_API_KEY)")
         p.add_argument("--dialect", choices=["responses", "chat"])
         p.add_argument("--model")
+        p.add_argument("--chat-url", help="open this instead of the built-in chat page")
 
     p = sub.add_parser("config", help="show or write ~/.collabosm/config.toml")
     common(p)
@@ -654,6 +806,15 @@ def main(argv=None):
     p.add_argument("--max-tokens", type=int, default=512)
     p.add_argument("--timeout", type=float, default=900.0)
 
+    p = sub.add_parser("start", help="start the client if needed, then open both windows")
+    common(p)
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p.add_argument("--no-open", action="store_true")
+
+    p = sub.add_parser("startup", help="open both windows automatically at login")
+    p.add_argument("--remove", action="store_true")
+
     p = sub.add_parser("update-ui", help="pull ui/ from the repo and cache it")
     p.add_argument("--repo", default=DEFAULT_REPO)
     p.add_argument("--ref", default=DEFAULT_REF)
@@ -664,6 +825,7 @@ def main(argv=None):
         ap.print_help()
         return 1
     return {"config": cmd_config, "ui": cmd_ui, "chat": cmd_chat,
+            "start": cmd_start, "startup": cmd_startup,
             "update-ui": cmd_update_ui}[args.cmd](args) or 0
 
 
