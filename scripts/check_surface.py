@@ -64,10 +64,11 @@ def read_events(resp):
             name = None
 
 
-def check_chat_stream(base, key, model):
+def check_chat_stream(base, key, model, prompt):
     conn, resp = request(base, "/chat/completions",
-                         {"model": model, "messages": [{"role": "user", "content": "hi"}],
-                          "stream": True, "max_tokens": 64}, key)
+                         {"model": model,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "stream": True, "max_tokens": 256}, key)
     deltas, first, last, done = [], None, None, False
     for name, data, at in read_events(resp):
         if name == "__done__":
@@ -92,10 +93,10 @@ def check_chat_stream(base, key, model):
     return text
 
 
-def check_responses_stream(base, key, model):
+def check_responses_stream(base, key, model, prompt):
     conn, resp = request(base, "/responses",
-                         {"model": model, "input": "hi", "stream": True,
-                          "max_output_tokens": 64}, key)
+                         {"model": model, "input": prompt, "stream": True,
+                          "max_output_tokens": 256}, key)
     events, seqs, deltas, terminal = [], [], [], None
     first_delta_at = None
     for name, data, at in read_events(resp):
@@ -130,9 +131,10 @@ def check_responses_stream(base, key, model):
     return text, events
 
 
-def check_responses_nonstream(base, key, model):
+def check_responses_nonstream(base, key, model, prompt):
     conn, resp = request(base, "/responses",
-                         {"model": model, "input": "hi", "max_output_tokens": 64}, key)
+                         {"model": model, "input": prompt,
+                          "max_output_tokens": 256}, key)
     body = json.loads(resp.read().decode())
     conn.close()
     out = body.get("output") or []
@@ -150,6 +152,13 @@ def main():
     ap.add_argument("--base", default="http://127.0.0.1:8099/v1")
     ap.add_argument("--key", default=None)
     ap.add_argument("--model", default="qwen3.8-flash-next-exl3")
+    # A real prompt, not "hi". This pack answers a 29-token prompt with a single
+    # stop token (new=1 finish=stop in the server log), which looks exactly like a
+    # broken stream and wasted an hour of debugging. Send something a model would
+    # actually answer.
+    ap.add_argument("--prompt", default=(
+        "In three sentences, explain why a Mixture-of-Experts model with 125B total "
+        "and 6B active parameters is cheaper to serve than a dense 125B model."))
     a = ap.parse_args()
 
     # /health lives at the server root, not under /v1.
@@ -175,15 +184,15 @@ def main():
     chat_text = ""
     resp_text = ""
     try:
-        chat_text = check_chat_stream(a.base, a.key, a.model)
+        chat_text = check_chat_stream(a.base, a.key, a.model, a.prompt)
     except Exception as exc:
         record("chat stream", False, repr(exc))
     try:
-        resp_text, _events = check_responses_stream(a.base, a.key, a.model)
+        resp_text, _events = check_responses_stream(a.base, a.key, a.model, a.prompt)
     except Exception as exc:
         record("responses stream", False, repr(exc))
     try:
-        check_responses_nonstream(a.base, a.key, a.model)
+        check_responses_nonstream(a.base, a.key, a.model, a.prompt)
     except Exception as exc:
         record("responses non-stream", False, repr(exc))
 

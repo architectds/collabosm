@@ -120,6 +120,29 @@ holds only ~35 checkpoints, roughly 70K tokens of anchored prefix at the default
 `recurrent_checkpoint_interval` of 2048 tokens. For a 500K resumable history, budget `-rcs` in the tens
 of GB. On a High-RAM box (167 GB, of which `-ngr` takes 36.4 GiB) there is room for that.
 
+## Serving: the last hop is a tunnel
+
+The VM has no inbound address, so `serve.sh` publishes the API through a Cloudflare tunnel, and
+that URL is what every client uses:
+
+```
+api_server.py on 127.0.0.1:8090  ->  cloudflared --url http://127.0.0.1:8090
+                                 ->  https://<host>.trycloudflare.com/v1
+```
+
+- The **key is stable** (`/content/api-key.txt`); the **hostname is not**, with a quick tunnel.
+- After every restart, `~/.modeldock/custom-endpoints.json` (`baseUrl`, and `label` for legibility)
+  points at a hostname that no longer exists, and every request 404s until it is updated and
+  ModelDock is relaunched. This is the most common "the endpoint is broken" report, and it is not a
+  server bug: check `/content/STATUS` first, then the configured `baseUrl`.
+- Set `TUNNEL_TOKEN` (and `PUBLIC_URL` for `status.py`) in `/content/collabosm.env` for a stable
+  hostname; then the endpoint config survives restarts untouched.
+- The tunnel is only a transport. Before blaming it, reproduce on loopback inside the VM
+  (`curl -s http://127.0.0.1:8090/health`) or locally against a stub
+  (`scripts/dev_stub.py` + `scripts/check_surface.py`).
+- `transport` must be `"responses"` in the ModelDock endpoint entry: the Responses dialect is the
+  path Codex actually uses.
+
 ## Cost guardrails
 
 - A100 High-RAM is **7.52 CU/h ≈ $0.75/h**. 200 CU ≈ **26.6 h/month**.

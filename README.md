@@ -112,6 +112,9 @@ On 2026-09-25, on one account, with no manual steps beyond the scripts in here:
   259.5 s and reached `/health` 200 at **76,437 / 81,920 MiB** of VRAM.
 - Over a public tunnel: `/v1/models` returned **401 without the key, 200 with it**, and a real
   chat completion came back in **3.1 s**.
+- Later the same day the whole chain was re-verified with a **real client**: Codex CLI 0.144.6,
+  `wire_api = "responses"`, through the quick tunnel to the live 4.05 bpw pack -
+  `Reply with exactly: pong` came back `pong`, exit 0, 8,536 prompt tokens.
 
 Known gaps, stated plainly:
 
@@ -192,7 +195,7 @@ client problem):
 | endpoint | notes |
 |---|---|
 | `POST /v1/chat/completions` | `choices[].message.content`, `finish_reason` = `stop`/`length`, `usage.prompt_tokens_details.cached_tokens`; `stream: true` returns SSE chunks + `[DONE]` (+ usage with `stream_options.include_usage`) |
-| `POST /v1/responses` | minimal Responses surface: `status`, `output[].content[].text`, `output_text`, `usage.{input,output,total}_tokens` |
+| `POST /v1/responses` | Responses surface: `status`, `output[].content[].text`, `output_text`, `usage.{input,output,total}_tokens`; `stream: true` emits the full lifecycle below |
 | `GET /v1/models` | the one model id, with `created` |
 | `GET /health` | plain `ok`, unauthenticated |
 | anything else | JSON 404 / 405 (never HTML) |
@@ -200,13 +203,75 @@ client problem):
 Accepted: `max_tokens` and `max_completion_tokens`, `temperature`, `top_p`, `stop`
 (string or list), `stream`, `stream_options.include_usage`.
 
+A streamed `/v1/responses` sends `sequence_number` on every event, in this order:
+`response.created` -> `response.in_progress` -> *(if thinking is on)*
+`output_item.added`(reasoning) -> `reasoning_text.delta` -> `reasoning_text.done` ->
+`output_item.done` -> `output_item.added`(message) -> `content_part.added` ->
+`output_text.delta` xN -> `output_text.done` -> `content_part.done` -> `output_item.done` ->
+`response.completed`. Deltas always carry `item_id`, `output_index` and `content_index`, and the
+ids in the terminal event are the ids the stream announced -- Codex binds deltas to an announced
+item and rejects the stream otherwise. Text is forwarded **while** the engine decodes: the server
+enqueues a `Job` and drains `Generator.iterate()`, rather than chunking up a finished completion.
+If a build's incremental path yields nothing, the server falls back to the blocking generator and
+logs `incremental path produced no text (new=... eos=...)` -- it never answers empty.
+
 **Thinking** is off by default, because that is what plain chat clients expect. Turn it on
 with `enable_thinking: true` or `reasoning_effort: xhigh|medium|low` (the pack's own template
 takes both); the trace is returned in `message.reasoning_content` and never leaks into
 `content`.
 
-### Keeping the URL stable
+## How it is served
 
-The default tunnel is a Cloudflare **quick tunnel**, so the hostname changes on every restart.
-Use a named tunnel (`cloudflared tunnel run <name>`, with a token or `cert.pem`) if you want a
-fixed address; nothing else in this kit depends on the URL.
+There is one shipping path, and its last hop is a **Cloudflare tunnel** -- the VM has no inbound
+address of its own, so the tunnel is what makes the API reachable from this machine:
+
+```
+bootstrap.sh  ->  runtime + weights on the VM
+serve.sh      ->  api_server.py on 127.0.0.1:8090          (model load: ~264 s, 76.4/81.9 GiB)
+              ->  /content/cloudflared tunnel --url http://127.0.0.1:8090
+              ->  https://<host>.trycloudflare.com/v1       <- every client points here
+```
+
+`serve.sh` writes the URL into `/content/STATUS` and prints it. The bearer key is generated once
+into `/content/api-key.txt` and is **stable across restarts**. Clients therefore need:
+
+```
+base_url  = https://<host>.trycloudflare.com/v1
+api_key   = contents of /content/api-key.txt
+model     = qwen3.8-flash-next-exl3
+```
+
+For **ModelDock** that is a custom endpoint in `~/.modeldock/custom-endpoints.json`:
+
+```json
+[
+  {
+    "modelId": "qwen3.8-flash-next-exl3",
+    "baseUrl": "https://<host>.trycloudflare.com/v1",
+    "apiKey": "<key from /content/api-key.txt>",
+    "label": "A100 80G exl3 (tunnel)",
+    "supportsVision": true,
+    "transport": "responses",
+    "contextWindow": 0
+  }
+]
+```
+
+`transport: "responses"` matters: ModelDock then speaks the Responses dialect to this server, which
+is the path that was broken and is now fixed. For Codex CLI against the same endpoint, use the
+provider block in [Testing it without a GPU](#testing-it-without-a-gpu) or point
+`base_url` at the tunnel - the rest is identical.
+
+### The one sharp edge: the hostname
+
+A **quick tunnel changes hostname on every restart**, so after each `serve.sh` the `baseUrl` in
+ModelDock is stale and every request 404s until it is updated (and ModelDock is relaunched). Two
+ways out:
+
+- **Named tunnel - recommended, and already wired.** Put `TUNNEL_TOKEN` in `/content/collabosm.env`
+  (plus `PUBLIC_URL` if you want `status.py` to print the address) and the hostname is fixed for
+  the life of the tunnel. ModelDock then never needs editing again.
+- Re-read the URL from `/content/STATUS` after each start and update ModelDock by hand.
+
+The API itself does not care: on loopback it is the same server, which is why all protocol work is
+done locally with `python scripts/check_surface.py --base http://127.0.0.1:8090/v1 --key <key>`.
