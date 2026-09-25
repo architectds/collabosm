@@ -40,6 +40,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL_DIR = os.environ.get("MODEL_DIR", "/content/exl3")
+MODEL_ID = os.environ.get("MODEL_ID", "qwen3.8-flash-next-exl3")
 SRC = os.environ.get("EXL3_SRC", "/content/exllamav3-src")
 if os.path.isdir(os.path.join(SRC, "examples")):
     sys.path.insert(0, os.path.join(SRC, "examples"))
@@ -830,9 +831,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(401, {"error": {"message": "missing or bad API key",
                                               "type": "invalid_request_error"}})
         if self.path.startswith("/v1/models"):
+            # MODEL_IDS lets a mux-style deployment advertise several served
+            # models from one endpoint, which is what a WebUI model picker needs
+            # to show machine/tier choices instead of a single hardcoded id.
+            ids = [m.strip() for m in
+                   os.environ.get("MODEL_IDS", MODEL_ID).split(",") if m.strip()]
             return self._send(200, {"object": "list", "data": [
-                {"id": "qwen3.8-flash-next-exl3", "object": "model",
-                 "created": SERVER_STARTED, "owned_by": "collabosm"}]})
+                {"id": m, "object": "model", "created": SERVER_STARTED,
+                 "owned_by": "collabosm"} for m in ids]})
         if self.path.startswith("/v1/status"):
             # Read-only contract: what this server can actually do, so a client does
             # not have to guess (and so a UI can grey out what is unavailable).
