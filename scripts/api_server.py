@@ -340,6 +340,37 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # --- SSE framing -----------------------------------------------------------
+    # A streamed body with no Content-Length and no Transfer-Encoding can only be
+    # ended by closing the socket. Through a tunnel hop that is not reliable: the
+    # origin closes, the edge keeps the client's read open, and the client waits
+    # for an EOF that never comes ("stream disconnected before completion").
+    # Explicit HTTP/1.1 chunked framing makes the end unambiguous at every hop.
+    def _sse_start(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self._chunked = True
+
+    def _sse_write(self, text):
+        data = text.encode("utf-8")
+        if getattr(self, "_chunked", False):
+            self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
+        else:
+            self.wfile.write(data)
+
+    def _sse_event(self, name, payload):
+        self._sse_write("event: %s\ndata: %s\n\n" % (name, json.dumps(payload)))
+
+    def _sse_end(self):
+        if getattr(self, "_chunked", False):
+            self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+        self.close_connection = True
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -506,12 +537,7 @@ class Handler(BaseHTTPRequestHandler):
         # Streaming: this build has no incremental callback here, so the whole
         # completion is delivered as one delta followed by [DONE]. Clients that
         # only need SSE framing are happy; there is no token-by-token typing.
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
+        self._sse_start()
         for chunk in (
             {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
              "model": req.get("model", "qwen3.8-flash-next-exl3"),
@@ -521,17 +547,17 @@ class Handler(BaseHTTPRequestHandler):
              "model": req.get("model", "qwen3.8-flash-next-exl3"),
              "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
         ):
-            self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+            self._sse_write("data: " + json.dumps(chunk) + "\n\n")
         so = req.get("stream_options")
         if isinstance(so, dict) and so.get("include_usage"):
-            self.wfile.write(("data: " + json.dumps({
+            self._sse_write("data: " + json.dumps({
                 "id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                 "model": req.get("model", "qwen3.8-flash-next-exl3"), "choices": [],
                 "usage": {"prompt_tokens": pt, "completion_tokens": nt,
                           "total_tokens": pt + nt,
-                          "prompt_tokens_details": {"cached_tokens": ct}}}) + "\n\n").encode())
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+                          "prompt_tokens_details": {"cached_tokens": ct}}}) + "\n\n")
+        self._sse_write("data: [DONE]\n\n")
+        self._sse_end()
 
     # ------------------------------------------------------------- Responses API
     def _responses(self, req):
@@ -569,21 +595,14 @@ class Handler(BaseHTTPRequestHandler):
         if not req.get("stream"):
             return self._send(200, payload)
         started = dict(payload, status="in_progress", output=[])
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
+        self._sse_start()
         for ev, data in (("response.created", started),
                          ("response.output_text.delta",
                           {"type": "response.output_text.delta", "delta": text,
                            "output_index": 0, "content_index": 0}),
                          ("response.completed", payload)):
-            self.wfile.write(("event: %s\ndata: %s\n\n"
-                              % (ev, json.dumps(data))).encode())
-        self.wfile.flush()
-        self.close_connection = True
+            self._sse_event(ev, data)
+        self._sse_end()
 
 
 def main():
