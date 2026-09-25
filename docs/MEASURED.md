@@ -135,3 +135,29 @@ Sizing guidance and the split-versus-unified argument are in `docs/RUNBOOK.md`.
 | experts | 512, top-10 |
 | vision | `vision_k6.safetensors` (561 MB) |
 | n-gram/PLE table | `ngram_embedding.safetensors` (36.36 GiB, host RAM via `-ngr`) |
+## Verified end to end, 2026-09-25
+
+One account, one box, no manual steps beyond `scripts/`:
+
+| step | result |
+|---|---|
+| `scripts/restore.py` | re-attached an **orphaned** assignment after the Colab CLI dropped its local record for the third time that day (VM alive and still billing); confirmed 79.3 GiB VRAM, 167.1 GiB RAM, cc 8.0, python 3.13.15 |
+| `scripts/serve.sh` | loaded the 4.05 bpw pack at `cache_size 500224` in **259.5 s**; `/health` 200 at **76,437 / 81,920 MiB** VRAM |
+| through the public tunnel | `/v1/models` **401 without the key, 200 with it**; a real chat completion answered in **3.1 s** |
+
+Runtime flags for that run: `-cq 4 -ndt 4 -gcs 4096 -ccs 16 -rcs 16 -ngr`.
+
+Two facts about the served model that cost real time to find:
+
+- **It is a reasoning model with thinking on by default.** A `max_tokens` under ~1K returns a
+  truncated reasoning trace rather than an answer; this looks like a broken server and is not one.
+- **`Generator.generate()` returns `(completions, last_results)`.** Reading `text` out of
+  `last_results` yields only the *final fragment* of the completion, so an early `api_server.py`
+  answered `" inputs"` to a real question. The server now unpacks the tuple and asks for
+  `completion_only=True`. This is the same class of bug as the per-request `Generator`: invisible,
+  and it does not raise.
+
+## Capacity
+
+The fitted VRAM line, the per-slot recurrent cost, the session table and the reasons the host-RAM
+tier cannot extend live capacity are in `docs/CONCURRENCY.md`.

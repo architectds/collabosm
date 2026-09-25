@@ -51,6 +51,20 @@ GEN = None
 TOK = None
 ARGS = None
 
+# --- auth ---------------------------------------------------------------------
+# serve.sh creates /content/api-key.txt and then publishes the port through a
+# quick tunnel. An open tunnel to an 80 GB GPU is not something to ship by
+# accident, so the key is enforced whenever it exists. Set COLLABOSM_NO_AUTH=1
+# for a loopback-only smoke test.
+KEY_FILE = os.environ.get("KEY_FILE", "/content/api-key.txt")
+NO_AUTH = os.environ.get("COLLABOSM_NO_AUTH", "0") == "1"
+API_KEY = None
+if not NO_AUTH and os.path.exists(KEY_FILE):
+    try:
+        API_KEY = open(KEY_FILE).read().strip() or None
+    except Exception as exc:
+        print("[api] could not read %s: %r" % (KEY_FILE, exc), flush=True)
+
 
 def build_engine():
     """Load once, with the flags the repository measured as best."""
@@ -129,17 +143,35 @@ def generate(prompt, max_tokens, temperature=None, top_p=None):
     if top_p is not None:
         kw["top_p"] = float(top_p)
     with LOCK:
+        # generate() returns (completions, last_results). Reading "text" out of
+        # last_results gives only the FINAL fragment of the completion -- that is
+        # the bug that made this server answer " inputs" to a real question.
+        # completion_only=True excludes the echoed prompt; the except path strips
+        # it by hand for builds that do not accept the flag.
         try:
-            out = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
-                               return_last_results=True, **kw)
-        except TypeError:
-            # sampling kwargs are not part of this build's generate() signature
-            out = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
-                               return_last_results=True)
-    r = out[-1] if isinstance(out, (list, tuple)) else out
-    if not isinstance(r, dict):
-        r = getattr(r, "__dict__", {"text": str(r)})
-    return r
+            try:
+                comp, last = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
+                                          return_last_results=True,
+                                          completion_only=True, **kw)
+            except TypeError:
+                try:
+                    comp, last = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
+                                              return_last_results=True,
+                                              completion_only=True)
+                except TypeError:
+                    comp, last = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
+                                              return_last_results=True)
+                    if isinstance(comp, str) and comp.startswith(prompt):
+                        comp = comp[len(prompt):]
+        except Exception:
+            raise
+    if isinstance(comp, (list, tuple)):
+        comp = comp[0] if comp else ""
+    if not isinstance(last, dict):
+        last = getattr(last, "__dict__", {}) or {}
+    last = dict(last)
+    last["text"] = comp or ""
+    return last
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -168,9 +200,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _authorized(self):
+        if NO_AUTH or not API_KEY:
+            return True
+        h = self.headers.get("Authorization", "") or ""
+        return h == ("Bearer " + API_KEY) or h == API_KEY
+
     def do_GET(self):
         if self.path.startswith("/health"):
             return self._send(200, "ok", "text/plain")
+        if not self._authorized():
+            return self._send(401, {"error": {"message": "missing or bad API key",
+                                              "type": "invalid_request_error"}})
         if self.path.startswith("/v1/models"):
             return self._send(200, {"object": "list", "data": [
                 {"id": "qwen3.8-flash-next-exl3", "object": "model",
@@ -180,6 +221,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.path.startswith("/v1/chat/completions"):
             return self._send(404, {"error": "not found"})
+        if not self._authorized():
+            return self._send(401, {"error": {"message": "missing or bad API key",
+                                              "type": "invalid_request_error"}})
         try:
             n = int(self.headers.get("Content-Length", "0"))
             req = json.loads(self.rfile.read(n) or b"{}")

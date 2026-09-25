@@ -1,7 +1,7 @@
 {
   "name": "collabosm",
   "description": "Run Qwen3.8-Flash-Next (125B-A6B MoE, hybrid Gated-DeltaNet + full attention) on ONE Colab A100-80GB High-RAM, via ExLlamaV3 with Q4 KV, MTP speculative decoding and a pinned-RAM second-tier KV page cache.",
-  "updated": "2026-09-24",
+  "updated": "2026-09-25",
   "verified_on": {
     "host": "Google Colab",
     "accelerator": "A100-SXM4-80GB",
@@ -55,7 +55,39 @@
     "kv_bytes_per_token": 10752,
     "warm_cache_restore": {"cold_s": 15.62, "restored_s": 0.58, "speedup": 27, "pages_restored": 104}
   },
-  "defaults": {
+  "live_endpoint_verified": {
+    "date": "2026-09-25",
+    "load_seconds": 259.5,
+    "cache_size_loaded": 500224,
+    "vram_after_load_MiB": 76437,
+    "vram_total_MiB": 81920,
+    "runtime_flags": "-cq 4 -ndt 4 -gcs 4096 -ccs 16 -rcs 16 -ngr",
+    "checks": {
+      "restore_py_reattached_orphaned_assignment": true,
+      "v1_models_401_without_key": true,
+      "v1_models_200_with_key": true,
+      "real_completion_seconds": 3.1
+    },
+    "note": "api_server.py enforces the bearer key from /content/api-key.txt. The served model is a reasoning model with thinking on by default: max_tokens below ~1K returns a truncated reasoning trace, not an answer. The tunnel is a Cloudflare quick tunnel, so the hostname is ephemeral."
+  },
+  "capacity": {
+    "source": "docs/CONCURRENCY.md",
+    "vram_fit": {
+      "base_MiB": 70453,
+      "MiB_per_cache_token": 0.011963,
+      "points": {"262144": 73589, "500224": 76437},
+      "note": "fitted at load with one live job; the measured slope is ~17% above nominal bytes_per_token"
+    },
+    "kv_bytes_per_token_reported": 10752,
+    "kv_tokens_usable_with_1GiB_margin": 872000,
+    "safe_joint_context_tokens": "600000-700000, because prefill staging grows during a real request",
+    "recurrent_state_per_live_slot_MiB": 546,
+    "max_live_slots_by_context": {"524288": 1, "409600": 2, "262144": 2, "204800": 3, "131072": 5, "65536": 8, "32768": 11, "16384": 14, "8192": 17},
+    "parked_tokens_per_GB_of_ccs": 92000,
+    "parked_tokens_at_ccs_16GB": 1470000,
+    "tier_restore_bytes_per_second": 593000000,
+    "note": "The VRAM page pool size is a load-time decision and the -ccs tier is evict-only, so host RAM cannot extend joint live context or live slot count; it only raises the number of warm parked conversations."
+  },  "defaults": {
     "cache_size": 262144,
     "cache_quant": "4",
     "generator_chunk_size": 4096,
@@ -65,3 +97,4 @@
     "port": 8090
   }
 }
+

@@ -15,7 +15,7 @@ if os.path.exists("/content/STATUS"):
 
 health = sh("curl -s -o /dev/null -w %{http_code} -m 5 http://127.0.0.1:%s/health" % PORT).strip()
 models = sh("curl -s -m 5 http://127.0.0.1:%s/v1/models" % PORT).strip()
-running = bool(sh("pgrep -f 'tabby|exllamav3|api/main.py|llama-server'").strip())
+running = bool(sh("pgrep -f 'api_server.py'").strip())
 gpu = sh("nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits").strip()
 tunnel = sh("grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' /content/tunnel.log 2>/dev/null"
             " | head -1").strip()

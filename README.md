@@ -18,8 +18,8 @@ Measured on the box this repo was built against:
 | resume a fully-evicted 32K conversation | **0.58 s** instead of 15.62 s |
 | cost | 7.52 CU/h (A100 High-RAM) ≈ $0.75/h, ≈26.6 h per 200 CU |
 
-For comparison, our llama.cpp build of the same model on the same card measured 1,012 t/s prefill and
-68.5 t/s decode. ExLlamaV3 is ~3x on prefill. See `docs/MEASURED.md` for provenance and caveats.
+ExLlamaV3 is the only engine in this repo. See `docs/MEASURED.md` for provenance and caveats, and
+`docs/CONCURRENCY.md` for how many sessions the card can actually hold.
 
 ## Requirements
 
@@ -98,12 +98,45 @@ and anything that depends on one is not shareable.
    `Generator.__init__`. A per-request Generator silently disables prompt caching *and* the pinned-RAM
    KV tier — the failure is invisible, you just quietly re-prefill everything. `api_server.py` holds one.
 
-## Status
+## Verified end to end
 
-v0.1 — proven end to end on one account: restore, bootstrap, serve, measure. The serving surface is
-deliberately small (no incremental token streaming yet; a streamed request is delivered as one delta
-followed by `[DONE]`). Session *assignment* is scripted (`restore.py`); it is not yet a configurable
-hosting layer — that is the next step if this is useful to others.
+On 2026-09-25, on one account, with no manual steps beyond the scripts in here:
+
+- `scripts/restore.py` **re-attached an orphaned assignment** after the Colab CLI dropped its local
+  record for the third time that day (VM alive, still billing) and confirmed the box:
+  79.3 GiB VRAM, 167.1 GiB RAM, cc 8.0, python 3.13.15.
+- `scripts/serve.sh` loaded the 4.05 bpw pack at **`cache_size 500224` (500K per stream)** in
+  259.5 s and reached `/health` 200 at **76,437 / 81,920 MiB** of VRAM.
+- Over a public tunnel: `/v1/models` returned **401 without the key, 200 with it**, and a real
+  chat completion came back in **3.1 s**.
+
+Known gaps, stated plainly:
+
+- **No token-by-token streaming.** A `stream: true` request is delivered as one delta followed by
+  `[DONE]`, so clients work but text appears all at once.
+- **Requests are serialised** by a lock — one Generator, one cache. "Multiple streams" today means
+  queued, not parallel.
+- **`max_batch_size > 1` is untested.** Every measurement ran `num_slots = 1`.
+- Session *assignment* is scripted; it is not yet a configurable hosting layer.
+
+## How many sessions fit
+
+Measured fit on this card (details and assumptions in `docs/CONCURRENCY.md`):
+
+| context per stream | max concurrent live sessions | bound by |
+|---|---:|---|
+| 500K | **1** | KV |
+| 262K | 2 | KV |
+| 131K | 5 | both |
+| 32K | 11 | recurrent state |
+| 16K | 14 | recurrent state |
+
+Each live slot costs **~546 MiB** of Gated-DeltaNet state before any KV, so concurrency saturates
+at ~20 slots as contexts get short (16K: 14 slots, 8K: 17) and 8-14 is the practical band. The
+pinned-RAM tier does **not** raise those numbers - eviction only touches unreferenced pages, and it
+is not a swap device for a live stream - but it does let ~1.47M tokens of *idle* conversation be
+resumed in well under a second instead of re-prefilled. `docs/CONCURRENCY.md` works through why the
+RAM tier cannot extend live capacity.
 
 ## Licence
 
