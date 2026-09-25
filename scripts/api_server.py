@@ -51,6 +51,7 @@ GEN = None
 TOK = None
 ARGS = None
 STOP_IDS = []
+SERVER_STARTED = 0
 
 # --- auth ---------------------------------------------------------------------
 # serve.sh creates /content/api-key.txt and then publishes the port through a
@@ -106,9 +107,75 @@ def clean_completion(text):
     return text.strip()
 
 
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+
+
+def template_kwargs_from(req):
+    """Thinking controls, as this pack's own template expects them.
+
+    The template takes `enable_thinking` (false pre-closes the think block, so the
+    model answers directly) and `reasoning_effort` (xhigh | medium | low). Default
+    here is thinking OFF, which is what plain chat clients expect; turn it on with
+    enable_thinking: true or a reasoning_effort value.
+    """
+    kw = {"enable_thinking": False}
+    if isinstance(req.get("enable_thinking"), bool):
+        kw["enable_thinking"] = req["enable_thinking"]
+    ck = req.get("chat_template_kwargs")
+    if isinstance(ck, dict):
+        if isinstance(ck.get("enable_thinking"), bool):
+            kw["enable_thinking"] = ck["enable_thinking"]
+        if ck.get("reasoning_effort") in ("xhigh", "medium", "low"):
+            kw["reasoning_effort"] = ck["reasoning_effort"]
+    eff = req.get("reasoning_effort")
+    if eff in ("xhigh", "medium", "low"):
+        kw["enable_thinking"] = True
+        kw["reasoning_effort"] = eff
+    return kw
+
+
+def split_thinking(text):
+    """(reasoning, answer), reported the way Qwen/DeepSeek endpoints do.
+
+    Split on the LAST </think>: when thinking is disabled the template pre-closes
+    the think block, and the model can echo another closing marker, so the first
+    one is not necessarily the real boundary. Any leftover marker is stripped from
+    both halves.
+    """
+    t = text or ""
+    i = t.rfind(THINK_CLOSE)
+    if i >= 0:
+        reasoning, answer = t[:i], t[i + len(THINK_CLOSE):]
+    elif t.lstrip().startswith(THINK_OPEN):
+        reasoning, answer = t, ""
+    else:
+        reasoning, answer = "", t
+    for marker in (THINK_OPEN, THINK_CLOSE):
+        reasoning = reasoning.replace(marker, "")
+        answer = answer.replace(marker, "")
+    return reasoning.strip(), answer.strip()
+
+
+def assistant_delta(text, reasoning):
+    d = {"role": "assistant"}
+    if reasoning:
+        d["reasoning_content"] = reasoning
+    d["content"] = text
+    return d
+
+
+def assistant_message(text, reasoning):
+    msg = {"role": "assistant", "content": text}
+    if reasoning:
+        msg["reasoning_content"] = reasoning
+    return msg
+
+
 def build_engine():
     """Load once, with the flags the repository measured as best."""
-    global GEN, TOK, ARGS, STOP_IDS
+    global GEN, TOK, ARGS, STOP_IDS, SERVER_STARTED
+    SERVER_STARTED = int(time.time())
     parser = argparse.ArgumentParser(allow_abbrev=False)
     model_init.add_args(parser, cache=True, add_sampling_args=True,
                         add_draft_model_args=True,
@@ -159,13 +226,16 @@ def build_engine():
           % (getattr(GEN, "cpu_page_cache", None) is not None), flush=True)
 
 
-def render_chat(messages):
+def render_chat(messages, template_kwargs=None):
     """Prefer the model's own chat template; fall back to ChatML."""
     tpl_path = os.path.join(MODEL_DIR, "chat_template.jinja")
     if JTemplate is not None and os.path.exists(tpl_path):
         try:
             src = open(tpl_path, encoding="utf-8").read()
-            out = JTemplate(src).render(messages=messages, add_generation_prompt=True)
+            kw = {"messages": messages, "add_generation_prompt": True}
+            if template_kwargs:
+                kw.update(template_kwargs)
+            out = JTemplate(src).render(**kw)
             if isinstance(out, str) and out.strip():
                 return out, "jinja"
         except Exception as exc:
@@ -178,9 +248,9 @@ def render_chat(messages):
     return "".join(parts), "chatml"
 
 
-def generate(prompt, max_tokens, temperature=None, top_p=None):
+def generate(prompt, max_tokens, temperature=None, top_p=None, stops=None):
     # end the turn at <|im_end|>/EOS instead of running to max_tokens
-    kw = {"stop_conditions": list(STOP_IDS) + ["<|im_end|>"]}
+    kw = {"stop_conditions": list(STOP_IDS) + ["<|im_end|>"] + list(stops or [])}
     if temperature is not None:
         kw["temperature"] = float(temperature)
     if top_p is not None:
@@ -217,6 +287,35 @@ def generate(prompt, max_tokens, temperature=None, top_p=None):
     return last
 
 
+def responses_messages(req):
+    """Map a Responses-API request onto chat messages."""
+    src = req.get("input")
+    if src is None:
+        src = req.get("messages")
+    msgs = []
+    if isinstance(src, str):
+        msgs.append({"role": "user", "content": src})
+    elif isinstance(src, list):
+        for item in src:
+            if isinstance(item, str):
+                msgs.append({"role": "user", "content": item})
+            elif isinstance(item, dict):
+                role = item.get("role") or "user"
+                c = item.get("content")
+                if isinstance(c, list):
+                    text = "".join(p.get("text", "") for p in c if isinstance(p, dict))
+                elif isinstance(c, str):
+                    text = c
+                else:
+                    text = item.get("text") or ""
+                msgs.append({"role": role, "content": text})
+    if isinstance(req.get("instructions"), str) and req["instructions"].strip():
+        msgs.insert(0, {"role": "system", "content": req["instructions"]})
+    if not msgs:
+        msgs = [{"role": "user", "content": "hello"}]
+    return msgs
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "collabosm"
@@ -232,6 +331,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        if code >= 400:
+            # Errors are terminal for the connection. Otherwise a client that was
+            # told "no" reuses the socket, and any bytes we never read get parsed
+            # as the next request line.
+            self.send_header("Connection", "close")
+            self.close_connection = True
         self.end_headers()
         self.wfile.write(body)
 
@@ -249,7 +354,38 @@ class Handler(BaseHTTPRequestHandler):
         h = self.headers.get("Authorization", "") or ""
         return h == ("Bearer " + API_KEY) or h == API_KEY
 
+    def _read_body(self):
+        """Consume the whole request body, however it is framed.
+
+        Not consuming it is what broke every client probe: with HTTP/1.1
+        keep-alive the stranded bytes are parsed as the next request line, which
+        surfaces as `Unsupported method ('{"model":...}POST')` and HTTP 501.
+        """
+        te = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in te:
+            out = b""
+            while True:
+                line = self.rfile.readline(65536).strip()
+                if not line:
+                    break
+                try:
+                    n = int(line.split(b";")[0], 16)
+                except ValueError:
+                    break
+                if n == 0:
+                    self.rfile.readline(65536)
+                    break
+                out += self.rfile.read(n)
+                self.rfile.readline(65536)
+            return out
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        return self.rfile.read(n) if n > 0 else b""
+
     def do_GET(self):
+        self._read_body()
         if self.path.startswith("/health"):
             return self._send(200, "ok", "text/plain")
         if not self._authorized():
@@ -258,49 +394,72 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/v1/models"):
             return self._send(200, {"object": "list", "data": [
                 {"id": "qwen3.8-flash-next-exl3", "object": "model",
-                 "owned_by": "collabosm"}]})
-        return self._send(404, {"error": "not found"})
+                 "created": SERVER_STARTED, "owned_by": "collabosm"}]})
+        if self.path in ("/", "/v1"):
+            return self._send(200, {"service": "collabosm",
+                                    "model": "qwen3.8-flash-next-exl3",
+                                    "endpoints": ["/v1/models", "/v1/chat/completions",
+                                                  "/v1/responses", "/health"]})
+        return self._send(404, {"error": {"message": "not found: %s" % self.path}})
 
     def do_POST(self):
-        if not self.path.startswith("/v1/chat/completions"):
-            return self._send(404, {"error": "not found"})
+        # Read first, always: every early return below used to strand the body.
+        raw = self._read_body()
+        if not (self.path.startswith("/v1/chat/completions")
+                or self.path.startswith("/v1/responses")):
+            return self._send(404, {"error": {"message": "not found: %s" % self.path}})
         if not self._authorized():
             return self._send(401, {"error": {"message": "missing or bad API key",
                                               "type": "invalid_request_error"}})
         try:
-            n = int(self.headers.get("Content-Length", "0"))
-            req = json.loads(self.rfile.read(n) or b"{}")
+            req = json.loads(raw or b"{}")
         except Exception as exc:
             return self._send(400, {"error": {"message": "bad json: %r" % exc}})
+        if self.path.startswith("/v1/responses"):
+            return self._responses(req)
+        return self._completions(req)
 
+    def _completions(self, req):
         msgs = req.get("messages") or []
-        prompt, how = render_chat(msgs)
-        max_tokens = int(req.get("max_tokens") or 512)
+        if not isinstance(msgs, list) or not msgs:
+            return self._send(400, {"error": {"message": "messages must be a non-empty array",
+                                              "type": "invalid_request_error",
+                                              "param": "messages"}})
+        prompt, how = render_chat(msgs, template_kwargs_from(req))
+        # OpenAI renamed max_tokens -> max_completion_tokens; accept both.
+        max_tokens = int(req.get("max_completion_tokens")
+                         or req.get("max_tokens") or 512)
         stream = bool(req.get("stream"))
+        stop = req.get("stop")
+        stops = [stop] if isinstance(stop, str) else list(stop or [])
 
         try:
-            r = generate(prompt, max_tokens, req.get("temperature"), req.get("top_p"))
+            r = generate(prompt, max_tokens, req.get("temperature"), req.get("top_p"),
+                         stops=stops)
         except Exception as exc:
             traceback.print_exc()
             return self._send(500, {"error": {"message": repr(exc)}})
 
-        text = r.get("text") or ""
+        reasoning, text = split_thinking(r.get("text") or "")
         pt = r.get("prompt_tokens") or 0
         ct = r.get("cached_tokens") or 0
         nt = r.get("new_tokens") or 0
         hit = (100.0 * ct / pt) if pt else 0.0
-        print("[api] template=%s prompt=%d cached=%d (%.1f%% hit) new=%d"
-              % (how, pt, ct, hit, nt), flush=True)
+        reason = r.get("eos_reason") or ""
+        finish = "length" if reason == "max_new_tokens" else "stop"
+        print("[api] template=%s prompt=%d cached=%d (%.1f%% hit) new=%d finish=%s"
+              % (how, pt, ct, hit, nt, finish), flush=True)
 
         cid = "chatcmpl-%d" % int(time.time() * 1000)
         if not stream:
             return self._send(200, {
                 "id": cid, "object": "chat.completion", "created": int(time.time()),
                 "model": req.get("model", "qwen3.8-flash-next-exl3"),
-                "choices": [{"index": 0, "finish_reason": "stop",
-                             "message": {"role": "assistant", "content": text}}],
+                "choices": [{"index": 0, "finish_reason": finish,
+                             "message": assistant_message(text, reasoning)}],
                 "usage": {"prompt_tokens": pt, "completion_tokens": nt,
-                          "total_tokens": pt + nt}})
+                          "total_tokens": pt + nt,
+                          "prompt_tokens_details": {"cached_tokens": ct}}})
 
         # Streaming: this build has no incremental callback here, so the whole
         # completion is delivered as one delta followed by [DONE]. Clients that
@@ -314,15 +473,75 @@ class Handler(BaseHTTPRequestHandler):
         for chunk in (
             {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
              "model": req.get("model", "qwen3.8-flash-next-exl3"),
-             "choices": [{"index": 0, "delta": {"role": "assistant", "content": text},
+             "choices": [{"index": 0, "delta": assistant_delta(text, reasoning),
                           "finish_reason": None}]},
             {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
              "model": req.get("model", "qwen3.8-flash-next-exl3"),
-             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+             "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
         ):
             self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+        so = req.get("stream_options")
+        if isinstance(so, dict) and so.get("include_usage"):
+            self.wfile.write(("data: " + json.dumps({
+                "id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
+                "model": req.get("model", "qwen3.8-flash-next-exl3"), "choices": [],
+                "usage": {"prompt_tokens": pt, "completion_tokens": nt,
+                          "total_tokens": pt + nt,
+                          "prompt_tokens_details": {"cached_tokens": ct}}}) + "\n\n").encode())
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
+
+    # ------------------------------------------------------------- Responses API
+    def _responses(self, req):
+        """Minimal OpenAI Responses surface.
+
+        Clients probe both this and /v1/chat/completions; answering only one of
+        them is what produced "supports neither Responses nor Chat Completions".
+        """
+        msgs = responses_messages(req)
+        prompt, how = render_chat(msgs, template_kwargs_from(req))
+        max_tokens = int(req.get("max_output_tokens") or req.get("max_tokens") or 512)
+        r = generate(prompt, max_tokens, req.get("temperature"), req.get("top_p"))
+        reasoning, text = split_thinking(r.get("text") or "")
+        nt = r.get("new_tokens") or 0
+        pt = r.get("prompt_tokens") or 0
+        print("[api] /v1/responses template=%s prompt=%d new=%d" % (how, pt, nt),
+              flush=True)
+        now = int(time.time())
+        payload = {
+            "id": "resp_%d" % int(time.time() * 1000),
+            "object": "response",
+            "created_at": now,
+            "status": "completed",
+            "model": req.get("model", "qwen3.8-flash-next-exl3"),
+            "output": [{"id": "msg_%d" % (now * 1000 + 1), "type": "message",
+                        "role": "assistant", "status": "completed",
+                        "content": [{"type": "output_text", "text": text,
+                                     "annotations": []}]}],
+            "output_text": text,
+            "reasoning": ({"summary": [{"type": "summary_text", "text": reasoning}]}
+                          if reasoning else None),
+            "usage": {"input_tokens": pt, "output_tokens": nt,
+                      "total_tokens": pt + nt},
+        }
+        if not req.get("stream"):
+            return self._send(200, payload)
+        started = dict(payload, status="in_progress", output=[])
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        for ev, data in (("response.created", started),
+                         ("response.output_text.delta",
+                          {"type": "response.output_text.delta", "delta": text,
+                           "output_index": 0, "content_index": 0}),
+                         ("response.completed", payload)):
+            self.wfile.write(("event: %s\ndata: %s\n\n"
+                              % (ev, json.dumps(data))).encode())
+        self.wfile.flush()
+        self.close_connection = True
 
 
 def main():
