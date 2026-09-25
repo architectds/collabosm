@@ -9,6 +9,9 @@ let cfg = null;
 let convos = [];
 let activeId = null;
 let controller = null;
+let pendingImages = [];     // data: URLs waiting to be sent with the next message
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
 
@@ -91,6 +94,17 @@ function messageNode(m) {
     d.append(s, rb);
     wrap.append(d);
   }
+  if (m.images && m.images.length) {
+    const thumbs = document.createElement('div');
+    thumbs.className = 'thumbs';
+    for (const url of m.images) {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = 'attached image';
+      thumbs.append(img);
+    }
+    wrap.append(thumbs);
+  }
   body.innerHTML = md(m.error ? '⚠ ' + m.error : m.content);
   if (m.pending && !m.content && !m.reasoning) body.textContent = '…';
   wrap.append(body);
@@ -141,15 +155,27 @@ async function readSSE(res, onEvent) {
   }
 }
 
-function historyFor(convo) {
+function historyFor(convo, dialect) {
+  const isResp = dialect === 'responses';
   return convo.messages
     .filter((m) => !m.pending && !m.error && (m.role === 'user' || m.role === 'assistant'))
-    .map((m) => ({ role: m.role, content: m.content || '' }));
+    .map((m) => {
+      if (!m.images || !m.images.length) return { role: m.role, content: m.content || '' };
+      /* OpenAI content parts. The image travels as a base64 data: URL, which is the
+         only form the server accepts by default -- it will not fetch a URL for us
+         (that would be an SSRF primitive on a tunnelled box). */
+      const parts = [{ type: isResp ? 'input_text' : 'text', text: m.content || '' }];
+      for (const url of m.images) {
+        parts.push(isResp ? { type: 'input_image', image_url: url }
+                          : { type: 'image_url', image_url: { url } });
+      }
+      return { role: m.role, content: parts };
+    });
 }
 
 async function streamTurn(convo, asst, dialect, model, signal) {
-  const history = historyFor(convo);       // excludes the pending assistant turn
   const isResp = dialect === 'responses';
+  const history = historyFor(convo, dialect);   // excludes the pending assistant turn
   const url = isResp ? '/v1/responses' : '/v1/chat/completions';
   const body = isResp
     ? { model, input: history, stream: true, max_output_tokens: 2048 }
@@ -231,7 +257,10 @@ async function send() {
   }
   const dialect = $('dialect').value;
   const model = $('model').value.trim() || 'qwen3.8-flash-next-exl3';
-  convo.messages.push({ role: 'user', content: text, ts: Date.now() });
+  const images = pendingImages.slice();
+  pendingImages = [];
+  renderChips();
+  convo.messages.push({ role: 'user', content: text, images, ts: Date.now() });
   const asst = { role: 'assistant', content: '', reasoning: '', pending: true,
                  dialect, model, ts: Date.now() };
   convo.messages.push(asst);
@@ -254,6 +283,31 @@ async function send() {
     save(); renderMessages();
     ta.focus();
   }
+}
+
+function renderChips() {
+  const box = $('chips');
+  box.innerHTML = '';
+  pendingImages.forEach((url, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    const img = document.createElement('img');
+    img.src = url;
+    const x = document.createElement('button');
+    x.textContent = '×';
+    x.onclick = () => { pendingImages.splice(i, 1); renderChips(); };
+    chip.append(img, x);
+    box.append(chip);
+  });
+}
+
+function addImageFile(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  if (file.size > MAX_IMAGE_BYTES) { alert('image is larger than 8 MB'); return; }
+  if (pendingImages.length >= MAX_IMAGES) { alert('at most ' + MAX_IMAGES + ' images per message'); return; }
+  const reader = new FileReader();
+  reader.onload = () => { pendingImages.push(reader.result); renderChips(); };
+  reader.readAsDataURL(file);
 }
 
 async function boot() {
@@ -335,6 +389,28 @@ async function boot() {
       }
     } catch (err) { alert('bad file: ' + err); }
   };
+  $('attach').onclick = () => $('imgfile').click();
+  $('imgfile').onchange = (e) => {
+    for (const f of e.target.files) addImageFile(f);
+    e.target.value = '';
+  };
+  $('prompt').addEventListener('paste', (e) => {
+    const items = e.clipboardData ? e.clipboardData.items : [];
+    let took = 0;
+    for (const it of items) {
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        addImageFile(it.getAsFile());
+        took++;
+      }
+    }
+    if (took) e.preventDefault();
+  });
+  const drop = (e) => {
+    e.preventDefault();
+    for (const f of (e.dataTransfer ? e.dataTransfer.files : [])) addImageFile(f);
+  };
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', drop);
   $('prompt').focus();
 }
 

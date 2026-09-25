@@ -200,6 +200,7 @@ ROUTES = {
     "/v1/chat/completions": "/chat/completions",
     "/v1/responses": "/responses",
     "/v1/models": "/models",
+    "/v1/status": "/status",
 }
 
 
@@ -601,6 +602,9 @@ def cmd_chat(args):
     return _chat_once(cfg, prompt, stream=not args.no_stream, max_tokens=args.max_tokens)
 
 
+UI_SUFFIXES = {'.html', '.js', '.css', '.svg', '.png', '.ico'}
+
+
 def cmd_update_ui(args):
     """Pull ui/ out of the repo at a pinned ref, verify, cache, print the digest."""
     repo = args.repo
@@ -621,7 +625,12 @@ def cmd_update_ui(args):
             if len(parts) < 3 or parts[1] != "ui" or not member.isfile():
                 continue
             name = parts[-1]
-            if name not in ("index.html", "app.js", "styles.css"):
+            # Take every top-level file under ui/. The page set grew (chat,
+            # status), and a hardcoded list ships a stale cache: the proxy then
+            # serves /chat out of a bundle that never contained it.
+            if parts[2] != name:
+                continue                    # nested directories stay out
+            if os.path.splitext(name)[1].lower() not in UI_SUFFIXES:
                 continue
             fh = tar.extractfile(member)
             data = fh.read()

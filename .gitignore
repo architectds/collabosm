@@ -4,3 +4,4 @@ __pycache__/
 bin/url.txt
 .env
 *.log
+.tmp/

@@ -29,6 +29,8 @@ async function refresh() {
   try { cfg = await getJSON('/local/config'); } catch {}
   try { health = await getJSON('/health'); } catch {}
   try { m = await getJSON('/local/metrics'); } catch {}
+  let srv = {};
+  try { srv = await getJSON('/v1/status'); } catch {}
 
   $('dot').className = 'dot ' + (health.ok ? 'ok' : 'bad');
   $('dot').title = health.ok ? 'proxy up' : 'proxy unreachable';
@@ -38,7 +40,18 @@ async function refresh() {
     fact('dialect', cfg.dialect || '—') +
     fact('model', cfg.model || '—') +
     fact('bearer key', cfg.has_key ? 'held by the client' : 'MISSING') +
-    fact('turns this session', String((m.turns || []).length));
+    fact('turns this session', String((m.turns || []).length)) +
+    fact('vision', srv.vision
+      ? (srv.vision.available ? 'available' : (srv.vision.enabled ? 'failed to load' : 'off (VISION=1 to enable)'))
+      : 'unknown') +
+    fact('image URLs', srv.image_input
+      ? (srv.image_input.remote_urls ? 'remote allowed' : 'data: URLs only')
+      : 'unknown');
+
+  const miss = (srv.launch && srv.launch.cache_size)
+    ? `cache ${srv.launch.cache_size} · kv q${srv.launch.cache_quant} · gcs ${srv.launch.generator_chunk_size} · mtp ndt ${srv.launch.num_draft_tokens} · ccs ${srv.launch.cache_size ? srv.launch.cpu_cache_gb : 0}GB`
+    : '';
+  $('launch').textContent = miss;
 
   const live = m.live;
   const el = $('live');

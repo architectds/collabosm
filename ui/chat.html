@@ -41,8 +41,11 @@
     <section id="messages"></section>
     <div id="metrics" class="metrics" title="measured by the local client while the stream passes; the API has no such field"></div>
 
+    <div id="chips" class="chips"></div>
     <footer>
-      <textarea id="prompt" rows="3" placeholder="Message — Enter to send, Shift+Enter for a newline"></textarea>
+      <button id="attach" class="ghost" title="Attach an image (or paste one)">&#128206;</button>
+      <textarea id="prompt" rows="3" placeholder="Message — Enter to send, Shift+Enter for a newline. Paste or drop an image to include it."></textarea>
+      <input id="imgfile" type="file" accept="image/*" multiple hidden />
       <button id="send" class="primary">Send</button>
     </footer>
   </main>

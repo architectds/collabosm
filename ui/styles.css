@@ -47,9 +47,19 @@ details.think .body { background: none; border: 0; padding: 6px 0 0; color: var(
 .cursor::after { content: "▌"; color: var(--accent); animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
+.launch { color: var(--dim); font: 11.5px ui-monospace, Consolas, monospace;
+  margin: -6px 0 14px; }
 .metrics { padding: 5px 20px; color: var(--dim); border-top: 1px solid var(--line);
   font: 11.5px ui-monospace, Consolas, monospace; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 14px 0; }
+.chips:empty { display: none; }
+.chip { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.chip img { display: block; height: 56px; }
+.chip button { position: absolute; top: 2px; right: 2px; padding: 0 5px; font-size: 12px;
+  line-height: 16px; background: rgba(0,0,0,.6); border: 0; color: #fff; border-radius: 4px; }
+.thumbs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.thumbs img { max-height: 160px; border-radius: 8px; border: 1px solid var(--line); display: block; }
 footer { display: flex; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--panel); }
 textarea { flex: 1; resize: none; background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font: inherit; }
 button { border: 1px solid var(--line); background: var(--panel2); color: var(--fg); border-radius: 7px; padding: 6px 11px; cursor: pointer; font: inherit; font-size: 13px; }
