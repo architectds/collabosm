@@ -21,12 +21,12 @@ COLAB_PY=${COLAB_PY:-$(ls -d "$HOME"/.local/share/uv/tools/google-colab-cli/bin/
 
 SESSION=${SESSION:-collabosm}
 RUNTIME=${RUNTIME:-wheel}          # wheel | source   (see manifest.json)
-CACHE_SIZE=${CACHE_SIZE:-262144}
+CACHE_SIZE=${CACHE_SIZE:-500224}    # measured best on an 80 GB card (see docs/CONCURRENCY.md)
 CACHE_QUANT=${CACHE_QUANT:-4}
-CPU_CACHE_GB=${CPU_CACHE_GB:-0}     # pinned RAM second-tier KV page cache, 0 = off
-RECURRENT_CACHE_GB=${RECURRENT_CACHE_GB:-4}
+CPU_CACHE_GB=${CPU_CACHE_GB:-32}    # pinned RAM second-tier KV page cache, 0 = off
+RECURRENT_CACHE_GB=${RECURRENT_CACHE_GB:-24}
 NDT=${NDT:-4}
-GCS=${GCS:-4096}
+GCS=${GCS:-8192}                    # biggest prefill lever measured (2,806 -> 3,882 t/s)
 PORT=${PORT:-8090}
 WAIT_MIN=${WAIT_MIN:-50}
 
@@ -44,9 +44,12 @@ fi
 
 # ------------------------------------------------------- 2. push the toolkit
 say "uploading the toolkit"
-for f in bootstrap.sh serve.sh status.py probe_gpu.py; do
+# api_server.py MUST be here: serve.sh launches /content/api_server.py, and this kit
+# shipped for a while without uploading it, so a fresh clone reached
+# "!! never became healthy" with nothing obviously wrong. Fail loudly instead.
+for f in api_server.py bootstrap.sh serve.sh status.py probe_gpu.py; do
   timeout 180 $COLAB upload -s "$SESSION" "$SCRIPT_DIR/$f" "/content/$f" >/dev/null 2>&1 \
-    && say "  ok   $f" || say "  FAIL $f"
+    && say "  ok   $f" || { say "  FAIL $f (upload) - refusing to continue"; exit 1; }
 done
 
 # ----------------------------------------------------------- 3. bootstrap it

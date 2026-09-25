@@ -53,13 +53,23 @@ nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader | sed
 [[ -x /content/cloudflared ]] || curl -fsSL -o /content/cloudflared \
   https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
   && chmod +x /content/cloudflared
-nohup /content/cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate > "$TUNNEL_LOG" 2>&1 &
-URL=""
-for _ in $(seq 1 45); do
-  URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" | head -1 || true)
-  [[ -n "$URL" ]] && break
-  sleep 4
-done
+# TUNNEL_TOKEN=<token from `cloudflared tunnel token <name>`> gives a STABLE hostname
+# (a named tunnel with its public hostname already pointing at http://localhost:$PORT).
+# Without it we get a quick tunnel, whose hostname changes on every restart.
+if [[ -n "${TUNNEL_TOKEN:-}" ]]; then
+  say "starting the NAMED tunnel (stable hostname)"
+  nohup /content/cloudflared tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" > "$TUNNEL_LOG" 2>&1 &
+  URL="${PUBLIC_URL:-}"
+  sleep 5
+else
+  nohup /content/cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate > "$TUNNEL_LOG" 2>&1 &
+  URL=""
+  for _ in $(seq 1 45); do
+    URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" | head -1 || true)
+    [[ -n "$URL" ]] && break
+    sleep 4
+  done
+fi
 
 if [[ -n "$URL" ]]; then
   printf '%s\n' "$URL" > /content/url.txt

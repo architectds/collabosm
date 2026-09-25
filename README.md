@@ -48,13 +48,14 @@ SESSION=mybox CACHE_SIZE=524288 CPU_CACHE_GB=8 bash scripts/up.sh
 | variable | default | meaning |
 |---|---|---|
 | `SESSION` | `collabosm` | local session name |
-| `CACHE_SIZE` | `262144` | total KV tokens across all jobs (multiple of 256) |
+| `CACHE_SIZE` | `500224` | total KV tokens across all jobs (multiple of 256) |
 | `CACHE_QUANT` | `4` | KV bits (`4` = Q4, `2`-`8` allowed) |
-| `CPU_CACHE_GB` | `0` | **pinned-RAM second-tier KV page cache** (0 = off) |
-| `RECURRENT_CACHE_GB` | `4` | host-RAM store for Gated-DeltaNet checkpoints |
+| `CPU_CACHE_GB` | `32` | **pinned-RAM second-tier KV page cache** (0 = off). Sized at 92K tokens/GB; do not treat it as free - it is allocated as pinned memory in full (32 + 24 = ~56 GB next to a 36.4 GiB n-gram table) |
+| `RECURRENT_CACHE_GB` | `24` | host-RAM store for Gated-DeltaNet checkpoints (~2048-token interval, 116 MB each) |
 | `GCS` | `4096` | generator chunk size — the biggest prefill lever we found |
 | `NDT` | `4` | MTP draft depth |
 | `RUNTIME` | `wheel` | `wheel` (prebuilt, no compile) or `source` |
+| `TUNNEL_TOKEN` | unset | named-tunnel token: gives a **stable hostname** instead of a quick tunnel. Pair with `PUBLIC_URL` for the URL shown in status |
 
 ## What is in here
 
