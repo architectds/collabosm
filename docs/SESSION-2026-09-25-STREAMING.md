@@ -1,9 +1,8 @@
 # collabosm session log — 2026-09-25: Responses streaming, resume point
 
-**Status when this was written:** streaming protocol fixed and proven locally; deployed to the
-A100 once more with a Job-construction fix plus a non-empty fallback. A100 session being shut
-down at the end of this session to stop billing. **Resume by re-running `scripts/upserve.sh`
-(or the usual restore + serve) and re-verifying — the last deploy's e2e was not confirmed.**
+**Status when this was written:** **Codex e2e verified against the live tunnel**, then the A100
+session was stopped (confirmed: no active sessions on the server, billing ended). The VM is gone;
+resume by restoring/creating a session and running the usual bootstrap + serve.
 
 ## The bug that was failing every Codex request
 
@@ -54,13 +53,34 @@ wire_api = "responses"
 env_key = "COLLABOSM_TEST_KEY"
 ```
 
+## Final e2e result (2026-09-25, live tunnel, real model)
+
+A real Codex CLI 0.144.6 with `wire_api = "responses"`, pointed at the quick tunnel
+`https://minority-integrate-globe-competition.trycloudflare.com/v1` with the session API key:
+
+```
+user: Reply with exactly: pong
+codex: pong
+tokens used 8,536        exit 0
+```
+
+That is the whole failure cleared: an announced-item delta stream, a coherent terminal event, and
+a non-empty answer over a public tunnel, consumed by the real Codex parser.
+
+One caveat that cost an hour of false alarms: `check_surface.py` still reports 5 failures against
+the live model because it deliberately sends a *tiny* prompt (`"hi"`, 29 tokens, `max_tokens: 64`)
+and this 4.05 bpw pack answers that with a single stop token -- `new=1 finish=stop` in the log --
+so the completion is empty. With a real prompt (Codex's ~8.5K-token context) the same server
+returns "pong" normally. The evaluation harness needs a real prompt, not "hi"; that is a checker
+fix for next time, not a server bug. Note the harness is still exactly right against a stubbed
+engine, which is what it was built for.
+
 ## Repository state
 
 - `c3d4458` — pushed: incremental streaming, the Responses lifecycle fix, `dev_stub.py`,
   `check_surface.py`, README section "Testing it without a GPU".
-- Uncommitted after that: the mirrored Job construction and the non-empty fallback in
-  `scripts/api_server.py`, plus the `--silent` mode in `dev_stub.py`. **Commit these on resume**
-  (they were verified locally, not yet on the A100).
+- `a999ba7` -- pushed: the mirrored Job construction, the non-empty blocking fallback, and
+  `dev_stub.py --silent`. Deployed to the A100 and verified there before the session was stopped.
 - The VM keeps the server at `/content/api_server.py` (flat, not `/content/collabosm/...`), so
   deployment is a file write plus `serve.sh` — `/content/api_server.py.bak-deploy2` holds the
   previous revision.
