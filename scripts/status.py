@@ -13,7 +13,7 @@ status = "no STATUS file"
 if os.path.exists("/content/STATUS"):
     status = open("/content/STATUS", errors="replace").read().strip()
 
-health = sh("curl -s -o /dev/null -w %{http_code} -m 5 http://127.0.0.1:%s/health" % PORT).strip()
+health = sh("curl -s -o /dev/null -w %%{http_code} -m 5 http://127.0.0.1:%s/health" % PORT).strip()
 models = sh("curl -s -m 5 http://127.0.0.1:%s/v1/models" % PORT).strip()
 running = bool(sh("pgrep -f 'api_server.py'").strip())
 gpu = sh("nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits").strip()

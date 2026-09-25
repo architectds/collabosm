@@ -50,6 +50,7 @@ LOCK = threading.Lock()
 GEN = None
 TOK = None
 ARGS = None
+STOP_IDS = []
 
 # --- auth ---------------------------------------------------------------------
 # serve.sh creates /content/api-key.txt and then publishes the port through a
@@ -66,9 +67,48 @@ if not NO_AUTH and os.path.exists(KEY_FILE):
         print("[api] could not read %s: %r" % (KEY_FILE, exc), flush=True)
 
 
+def discover_stop_ids():
+    """Stop tokens for this model.
+
+    config.json in this pack declares eos_token_id = null; the real EOS list lives
+    in the HF-style generation_config.json ([248046 <|im_end|>, 248044
+    <|endoftext|>]), which exllamav3 does not read. Without stop conditions the only
+    way generation ends is max_new_tokens, and the model will happily write the next
+    turn's markup as ordinary text instead of stopping.
+    """
+    ids = set()
+    path = os.path.join(MODEL_DIR, "generation_config.json")
+    if os.path.exists(path):
+        try:
+            e = json.load(open(path)).get("eos_token_id")
+            if isinstance(e, int):
+                ids.add(int(e))
+            elif isinstance(e, (list, tuple)):
+                ids.update(int(x) for x in e)
+        except Exception as exc:
+            print("[api] generation_config.json unreadable: %r" % exc, flush=True)
+    for tok in ("<|im_end|>", "<|endoftext|>"):
+        try:
+            enc = TOK.encode(tok, encode_special_tokens=True)
+            vals = enc.flatten().tolist() if hasattr(enc, "flatten") else list(enc)
+            ids.update(int(v) for v in vals)
+        except Exception:
+            pass
+    return sorted(ids)
+
+
+def clean_completion(text):
+    """Cut the trailing markup a non-stopping model writes as plain text."""
+    for marker in ("<|im_end|>", "<|endoftext|>", "<|im_start|>", "<|endofprompt|>"):
+        i = text.find(marker)
+        if i >= 0:
+            text = text[:i]
+    return text.strip()
+
+
 def build_engine():
     """Load once, with the flags the repository measured as best."""
-    global GEN, TOK, ARGS
+    global GEN, TOK, ARGS, STOP_IDS
     parser = argparse.ArgumentParser(allow_abbrev=False)
     model_init.add_args(parser, cache=True, add_sampling_args=True,
                         add_draft_model_args=True,
@@ -113,6 +153,8 @@ def build_engine():
                     cpu_cache_size=int(ccs * 1024 ** 3),
                     recurrent_cache_size=int(rcs * 1024 ** 3))
     TOK = tokenizer
+    STOP_IDS = discover_stop_ids()
+    print("[api] stop ids: %s" % STOP_IDS, flush=True)
     print("[api] generator ready (cpu tier: %s)"
           % (getattr(GEN, "cpu_page_cache", None) is not None), flush=True)
 
@@ -137,7 +179,8 @@ def render_chat(messages):
 
 
 def generate(prompt, max_tokens, temperature=None, top_p=None):
-    kw = {}
+    # end the turn at <|im_end|>/EOS instead of running to max_tokens
+    kw = {"stop_conditions": list(STOP_IDS) + ["<|im_end|>"]}
     if temperature is not None:
         kw["temperature"] = float(temperature)
     if top_p is not None:
@@ -170,7 +213,7 @@ def generate(prompt, max_tokens, temperature=None, top_p=None):
     if not isinstance(last, dict):
         last = getattr(last, "__dict__", {}) or {}
     last = dict(last)
-    last["text"] = comp or ""
+    last["text"] = clean_completion(comp or "")
     return last
 
 
