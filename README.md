@@ -195,6 +195,7 @@ client problem):
 | endpoint | notes |
 |---|---|
 | `POST /v1/chat/completions` | `choices[].message.content`, `finish_reason` = `stop`/`length`, `usage.prompt_tokens_details.cached_tokens`; `stream: true` returns SSE chunks + `[DONE]` (+ usage with `stream_options.include_usage`) |
+| `GET /v1/status` | read-only contract: launch parameters, cache size, uptime, **vision availability** and the image-input policy |
 | `POST /v1/responses` | Responses surface: `status`, `output[].content[].text`, `output_text`, `usage.{input,output,total}_tokens`; `stream: true` emits the full lifecycle below |
 | `GET /v1/models` | the one model id, with `created` |
 | `GET /health` | plain `ok`, unauthenticated |
@@ -308,8 +309,63 @@ Two gaps to know about before pointing anything at it:
 - **`temperature` and `top_p` are accepted and ignored** by `api_server.py`: it builds the job with
   `sampler=None` and never forwards them. A UI slider for them is a fake knob until the sampler is
   wired. Thinking (`enable_thinking`, `reasoning_effort`), `max_tokens` and `stop` do work.
-- **No image input.** `api_server.py` has no multimodal path at all: an OpenAI-style image content
-  part is rendered as text into the prompt. The pack is multimodal, the server does not expose it.
+- **Images: implemented, and off by default.** See [Images](#images) below. The old behaviour --
+  an image part rendered as text into the prompt, so the request "worked" and the picture was
+  ignored -- is gone: an image is now embedded, or the request is refused with a reason.
+
+## Images
+
+The pack is multimodal (`vision_config`, `image_token_id`, `preprocessor_config.json`). The reason
+this server could not see images is specific and worth knowing: **`model_init.init()` loads only the
+`text` component (or `mtp`)**, so the vision tower has to be loaded as its own component. That is
+what `VISION=1` does:
+
+```bash
+VISION=1 ...            # load ExModel(component="vision") alongside the text model
+IMAGE_URLS=1 ...        # allow remote http(s) image URLs (see below)
+MAX_IMAGE_BYTES=12582912
+MAX_IMAGES=8
+```
+
+Then an ordinary OpenAI image part works in both dialects:
+
+```json
+{"role": "user", "content": [
+  {"type": "text", "text": "What colour is this image?"},
+  {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+]}
+```
+
+Mechanically: the image is embedded once, and the embedding's `text_alias` is inserted into the
+prompt where the image belongs. `tokenizer.encode(..., encode_special_tokens=True, embeddings=[...])`
+expands that alias into the placeholder span, and the same embeddings ride along on the `Job`. Text
+prompts take the plain path exactly as before -- special-token encoding is only switched on when
+embeddings are present.
+
+**Deliberately not a URL fetcher by default.** This server is published through a tunnel, so
+"fetch whatever URL the caller sent" would be an SSRF primitive aimed at the VM's own metadata
+service, and "open whatever path the caller sent" would be a local file read. So:
+
+- `data:` URLs only, unless `IMAGE_URLS=1`.
+- with `IMAGE_URLS=1`, the host is resolved and every address must be **globally routable** --
+  loopback, private, link-local and metadata addresses are refused, and redirects are not followed
+  (one hop only, so a redirect cannot bounce to an internal host after the check).
+- filesystem paths are never accepted, with or without vision, and the reference policy is checked
+  *before* the capability check so the error you get is about your request, not about this box.
+- an image that cannot be embedded is a **400** (`type: vision_unavailable`), never a silent
+  text-only answer.
+
+**Why `VISION=1` is not the default yet:** this box already sits at 76.4 / 81.9 GiB, and the tower's
+VRAM cost has not been measured here. Flip it on a real load, watch the number, then make it the
+default in `serve.sh`. `GET /v1/status` says which state a running server is in, so a client (or
+ModelDock's `supportsVision`) can stop guessing.
+
+Verify either way -- the tool accepts both outcomes, because a server without vision must refuse:
+
+```bash
+python scripts/check_vision.py --base http://127.0.0.1:8090/v1 --key <key>
+python scripts/check_vision.py --base <tunnel>/v1 --key <key>
+```
 
 ## How it is served
 

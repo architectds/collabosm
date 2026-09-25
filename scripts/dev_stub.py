@@ -17,8 +17,10 @@ Auth is disabled (COLLABOSM_NO_AUTH=1). Loopback only -- never expose this port.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import tempfile
 import time
 import types
 from http.server import ThreadingHTTPServer
@@ -79,12 +81,48 @@ THOUGHTS = (
 )
 
 
-def install_engine(answer, thoughts, chunk, delay, think, silent=False):
+class _FakeVision:
+    """Stands in for ExModel(component="vision") so the image path can be exercised
+    end to end without a GPU: it hands back the same text_alias contract the real
+    tower produces."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get_image_embeddings(self, tokenizer=None, image=None, text_alias=None):
+        if image is None:
+            raise ValueError("fake vision got no image")
+        self.calls += 1
+        return types.SimpleNamespace(text_alias="<|image_pad|>", embeddings=None,
+                                     tokenizer=None, image_size=getattr(image, "size", None))
+
+
+RECORD = os.environ.get("STUB_RECORD",
+                        os.path.join(tempfile.gettempdir(), "collabosm-stub-last.json"))
+
+
+HISTORY = []
+
+
+def _record(payload):
+    """Keep a short history, not just the last call: a test has to be able to look
+    at the request that carried an image even though a text-only call follows it."""
+    HISTORY.append(payload)
+    try:
+        with open(RECORD, "w", encoding="utf-8") as f:
+            json.dump(HISTORY[-10:], f)
+    except Exception:
+        pass
+
+
+def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=False):
     text = ("<think>%s</think>\n%s" % (thoughts, answer)) if think else answer
 
     def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None,
-                          stops=None):
+                          stops=None, embeddings=None):
         """Same contract as the shipping seam: yield raw text fragments."""
+        _record({"prompt": prompt, "embeddings": len(embeddings or []),
+                 "vision_calls": getattr(api_server.VISION, "calls", 0)})
         api_server.LAST.clear()
         api_server.LAST["prompt_tokens"] = 29
         if silent:
@@ -112,6 +150,10 @@ def install_engine(answer, thoughts, chunk, delay, think, silent=False):
     api_server._engine_fragments = _engine_fragments
     api_server._generate_blocking = _generate_blocking
     api_server.STOP_IDS = []
+    if vision:
+        api_server.VISION = _FakeVision()
+        api_server.VISION_WANTED = True
+        api_server.VISION_ERR = None
 
 
 def main():
@@ -126,9 +168,11 @@ def main():
                     help="emit a <think> block so the reasoning item is exercised")
     ap.add_argument("--silent", action="store_true",
                     help="engine yields nothing, to exercise the blocking fallback")
+    ap.add_argument("--vision", action="store_true",
+                    help="install a fake vision tower so image input can be tested")
     a = ap.parse_args()
 
-    install_engine(ANSWER, THOUGHTS, a.chunk, a.delay, a.think, a.silent)
+    install_engine(ANSWER, THOUGHTS, a.chunk, a.delay, a.think, a.silent, a.vision)
     srv = ThreadingHTTPServer((a.host, a.port), api_server.Handler)
     print("[dev_stub] listening on http://%s:%d  (chunk=%d delay=%.3fs think=%s)"
           % (a.host, a.port, a.chunk, a.delay, a.think), flush=True)
