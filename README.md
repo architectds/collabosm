@@ -303,6 +303,8 @@ For Open WebUI, which is the natural fit: `uv tool install open-webui`, then
 Settings -> Connections -> OpenAI API with the values above. It talks to the proxy from its own
 backend, uses `/v1/chat/completions` (not the Responses dialect, which is Codex's), and brings
 multi-conversation itself -- which is why this repo does not try to be a chat app.
+The measured recipe -- where it installs, which environment variables matter, what the first
+run does, and what it costs on a metered A100 -- is in [docs/OPEN-WEBUI.md](docs/OPEN-WEBUI.md).
 
 Two gaps to know about before pointing anything at it:
 
