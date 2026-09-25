@@ -26,8 +26,13 @@ PY
 KEY=$(cat "$KEY_FILE")
 
 # stop any previous instance (this script is safe to re-run)
-pkill -f 'scripts/api_server.py|/content/api_server.py' 2>/dev/null || true
-pkill -f cloudflared 2>/dev/null || true
+# Older serve.sh processes must go too: otherwise a superseded instance watches its
+# own child get killed and prints "api_server died" over the new run's log.
+for pid in $(pgrep -f 'bash /content/serve.sh' 2>/dev/null); do
+  [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
+done
+pkill -f 'api_serve[r].py' 2>/dev/null || true
+pkill -f 'cloudflare[d]' 2>/dev/null || true
 sleep 2
 
 say "starting the API (cache=${CACHE_SIZE:-262144} cq=${CACHE_QUANT:-4} ccs=${CPU_CACHE_GB:-0}GB ndt=${NDT:-4} gcs=${GCS:-4096})"
@@ -57,6 +62,7 @@ for _ in $(seq 1 45); do
 done
 
 if [[ -n "$URL" ]]; then
+  printf '%s\n' "$URL" > /content/url.txt
   status "stage=ready url=$URL port=$PORT"
   say "ready: $URL   (api key: $KEY)"
 else
