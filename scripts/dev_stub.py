@@ -79,18 +79,38 @@ THOUGHTS = (
 )
 
 
-def install_engine(answer, thoughts, chunk, delay, think):
+def install_engine(answer, thoughts, chunk, delay, think, silent=False):
     text = ("<think>%s</think>\n%s" % (thoughts, answer)) if think else answer
 
     def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None,
                           stops=None):
         """Same contract as the shipping seam: yield raw text fragments."""
+        api_server.LAST.clear()
+        api_server.LAST["prompt_tokens"] = 29
+        if silent:
+            # An engine that stops on the first token: nothing to stream. This is
+            # the shape that produced empty answers on the live A100 pack, so the
+            # harness has to be able to reproduce it.
+            api_server.LAST["new_tokens"] = 1
+            api_server.LAST["eos_reason"] = "stop_token"
+            return
         for i in range(0, len(text), chunk):
             if delay:
                 time.sleep(delay)
             yield text[i:i + chunk]
+        api_server.LAST["new_tokens"] = len(text) // 4
+        api_server.LAST["eos_reason"] = "stop_token"
+
+    def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None,
+                           stops=None):
+        """The one-shot path the server falls back to."""
+        if delay:
+            time.sleep(delay * 3)
+        return {"text": text, "prompt_tokens": 29, "cached_tokens": 0,
+                "new_tokens": len(text) // 4, "eos_reason": "max_new_tokens"}
 
     api_server._engine_fragments = _engine_fragments
+    api_server._generate_blocking = _generate_blocking
     api_server.STOP_IDS = []
 
 
@@ -104,9 +124,11 @@ def main():
                     help="seconds between fragments")
     ap.add_argument("--think", action="store_true",
                     help="emit a <think> block so the reasoning item is exercised")
+    ap.add_argument("--silent", action="store_true",
+                    help="engine yields nothing, to exercise the blocking fallback")
     a = ap.parse_args()
 
-    install_engine(ANSWER, THOUGHTS, a.chunk, a.delay, a.think)
+    install_engine(ANSWER, THOUGHTS, a.chunk, a.delay, a.think, a.silent)
     srv = ThreadingHTTPServer((a.host, a.port), api_server.Handler)
     print("[dev_stub] listening on http://%s:%d  (chunk=%d delay=%.3fs think=%s)"
           % (a.host, a.port, a.chunk, a.delay, a.think), flush=True)

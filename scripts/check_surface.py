@@ -187,9 +187,14 @@ def main():
     except Exception as exc:
         record("responses non-stream", False, repr(exc))
 
-    record("chat vs responses text agree",
-           bool(chat_text) and chat_text.strip() == resp_text.strip(),
+    record("chat and responses both return text",
+           bool(chat_text.strip()) and bool(resp_text.strip()),
            "chat=%d chars responses=%d chars" % (len(chat_text), len(resp_text)))
+    # Two independent samples of a sampled model are expected to differ; the stub
+    # (greedy) matches exactly, which is why this is informational, not a check.
+    print("INFO  chat/Responses text %s"
+          % ("identical" if chat_text.strip() == resp_text.strip() else "differs (sampling)"),
+          flush=True)
 
     bad = [n for n, ok, _ in RESULTS if not ok]
     print("\n%d checks, %d failed" % (len(RESULTS), len(bad)), flush=True)

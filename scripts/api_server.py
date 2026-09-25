@@ -279,9 +279,20 @@ def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=No
         input_ids = TOK.encode(prompt, add_bos=True)
     n_prompt = int(input_ids.shape[-1]) if hasattr(input_ids, "shape") else len(input_ids)
     LAST["prompt_tokens"] = n_prompt
+    # Mirror Generator.generate()'s own Job construction field for field. A Job
+    # built with fewer fields behaves differently: it stopped after a single
+    # token here, which is what an empty answer looks like from the client side.
     job = Job(input_ids=input_ids,
               max_new_tokens=max_tokens,
-              stop_conditions=stops_all)
+              min_new_tokens=0,
+              stop_conditions=stops_all,
+              sampler=None,
+              filters=[],
+              token_healing=False,
+              decode_special_tokens=False,
+              embeddings=[],
+              max_rq_tokens=None,
+              stop_on_loop=None)
     serial = GEN.enqueue(job)
     while GEN.num_remaining_jobs():
         for r in GEN.iterate():
@@ -355,6 +366,22 @@ def collect(prompt, max_tokens, temperature=None, top_p=None, stops=None,
         return _generate_blocking(prompt, max_tokens, temperature, top_p, stops)
     out = dict(LAST)
     out["text"] = clean_completion("".join(buf))
+    if not out["text"].strip():
+        # Never answer empty. The incremental path can yield nothing if a build's
+        # Job defaults differ, or if the model stops on token one; the blocking
+        # path is the one that is known to work on this pack, so use it rather
+        # than handing the client an empty completion.
+        out["new_tokens"] = out.get("new_tokens")
+        print("[api] incremental path produced no text (new=%s eos=%s); retrying "
+              "with the blocking generator" % (out.get("new_tokens"),
+                                               out.get("eos_reason")), flush=True)
+        r = _generate_blocking(prompt, max_tokens, temperature, top_p, stops)
+        print("[api] blocking fallback: new=%s eos=%s text=%r"
+              % (r.get("new_tokens"), r.get("eos_reason"),
+                 (r.get("text") or "")[:60]), flush=True)
+        if on_delta is not None and (r.get("text") or "").strip():
+            on_delta(r["text"])
+        return r
     return out
 
 
@@ -758,8 +785,9 @@ class Handler(BaseHTTPRequestHandler):
                 traceback.print_exc()
                 return self._send(500, {"error": {"message": repr(exc)}})
             reasoning, text = split_thinking(r.get("text") or "")
-            print("[api] /v1/responses template=%s prompt=%s new=%s"
-                  % (how, r.get("prompt_tokens"), r.get("new_tokens")), flush=True)
+            print("[api] /v1/responses template=%s prompt=%s new=%s eos=%s text=%r"
+                  % (how, r.get("prompt_tokens"), r.get("new_tokens"),
+                     r.get("eos_reason"), text[:60]), flush=True)
             return self._send(200, payload_for(r, text, reasoning))
 
         seq = [0]
