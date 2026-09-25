@@ -220,6 +220,68 @@ with `enable_thinking: true` or `reasoning_effort: xhigh|medium|low` (the pack's
 takes both); the trace is returned in `message.reasoning_content` and never leaks into
 `content`.
 
+## Client, and using a real WebUI
+
+`collabosm.py` is the local client. Stdlib only, no install step:
+
+```bash
+python collabosm.py config --init --endpoint https://<host>.trycloudflare.com/v1 --api-key <key>
+python collabosm.py ui        # http://127.0.0.1:8790  (page + proxy)
+python collabosm.py chat "hello"          # same path, terminal
+python collabosm.py update-ui             # pull ui/ from this repo and cache it
+```
+
+It implements **exactly two dialects**, the two Codex uses: `/v1/responses` and
+`/v1/chat/completions` (plus `/v1/models`, which every OpenAI-compatible client probes first).
+Anything else returns a JSON 404 that says so.
+
+**Why a local proxy instead of pointing a client straight at the endpoint**
+
+- the bearer key stays in this process and is never handed to a browser,
+- the page is same-origin with the proxy, so there is no CORS surface at all,
+- the UI can be updated independently of the VM.
+
+There is deliberately **no** `Access-Control-Allow-Origin: *` here: a wildcard on a proxy that
+injects a bearer key would let any web page you happen to visit spend your GPU through it. Server-side
+UIs do not need it (they call upstream from their own backend); if a browser-hosted UI ever does,
+add an explicit origin allowlist, not a wildcard.
+
+### The metrics contract
+
+The OpenAI protocol has no field for prefill or decode throughput, so no off-the-shelf UI can show
+it. The client times the stream as it passes and derives it:
+
+- `prefill ~= prompt_tokens / time-to-first-token` (includes queueing and prefill)
+- `decode ≈ output_tokens / (total − time-to-first-token)`
+
+`GET /local/metrics` returns `{last, live, turns}`. Tokens come from the upstream's own `usage` when
+it sends one and are flagged `"estimated": true` otherwise; a non-streamed turn reports no rates at
+all, because without a first-token time there is no prefill/decode boundary to measure. A wrong
+number presented as a measurement is worse than no number.
+
+### Pointing an existing WebUI at it
+
+Any OpenAI-compatible client works; give it the proxy, not the VM:
+
+```
+base URL : http://127.0.0.1:8790/v1
+API key  : anything (the proxy injects the real one)
+model    : qwen3.8-flash-next-exl3
+```
+
+For Open WebUI, which is the natural fit: `uv tool install open-webui`, then
+Settings -> Connections -> OpenAI API with the values above. It talks to the proxy from its own
+backend, uses `/v1/chat/completions` (not the Responses dialect, which is Codex's), and brings
+multi-conversation itself -- which is why this repo does not try to be a chat app.
+
+Two gaps to know about before pointing anything at it:
+
+- **`temperature` and `top_p` are accepted and ignored** by `api_server.py`: it builds the job with
+  `sampler=None` and never forwards them. A UI slider for them is a fake knob until the sampler is
+  wired. Thinking (`enable_thinking`, `reasoning_effort`), `max_tokens` and `stop` do work.
+- **No image input.** `api_server.py` has no multimodal path at all: an OpenAI-style image content
+  part is rendered as text into the prompt. The pack is multimodal, the server does not expose it.
+
 ## How it is served
 
 There is one shipping path, and its last hop is a **Cloudflare tunnel** -- the VM has no inbound

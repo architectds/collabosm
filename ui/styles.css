@@ -1,0 +1,60 @@
+:root {
+  --bg: #0f1115; --panel: #161923; --panel2: #1d2130; --line: #2a2f40;
+  --fg: #e6e9f0; --dim: #8d95a8; --accent: #6ea8fe; --user: #24304a;
+  --think: #1a1f2e; --danger: #b4544e; --ok: #4ea36e; --warn: #c9a227;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 14px/1.5 ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+}
+#app { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
+
+aside { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; font-size: 15px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); display: inline-block; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--danger); }
+#list { list-style: none; margin: 8px 0 0; padding: 0 8px; overflow: auto; flex: 1; min-height: 0; }
+#list li { padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--dim); display: flex; gap: 8px; align-items: center; }
+#list li:hover { background: var(--panel2); }
+#list li.active { background: var(--panel2); color: var(--fg); }
+#list li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+#list li button { opacity: 0; }
+#list li:hover button { opacity: 1; }
+.foot { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+
+main { display: flex; flex-direction: column; min-height: 0; }
+header { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header label { color: var(--dim); display: flex; gap: 6px; align-items: center; font-size: 12px; }
+header select, header input { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 12px; }
+header input { width: 200px; }
+.spacer { flex: 1; }
+.endpoint { color: var(--dim); font-size: 12px; font-family: ui-monospace, Consolas, monospace; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#messages { flex: 1; overflow: auto; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.msg { max-width: 860px; width: 100%; margin: 0 auto; }
+.msg .who { font-size: 11px; color: var(--dim); margin-bottom: 4px; letter-spacing: .04em; text-transform: uppercase; }
+.msg .body { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.user .body { background: var(--user); }
+.msg.error .body { border-color: var(--danger); color: #f0c2bf; }
+.msg pre { background: var(--panel2); padding: 8px 10px; border-radius: 8px; overflow: auto; }
+.msg code { background: var(--panel2); padding: 1px 4px; border-radius: 4px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+details.think { margin: 6px 0 8px; background: var(--think); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+details.think summary { color: var(--dim); cursor: pointer; font-size: 12px; }
+details.think .body { background: none; border: 0; padding: 6px 0 0; color: var(--dim); }
+.usage { color: var(--dim); font-size: 11px; margin-top: 4px; font-family: ui-monospace, Consolas, monospace; }
+.cursor::after { content: "▌"; color: var(--accent); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.metrics { padding: 5px 20px; color: var(--dim); border-top: 1px solid var(--line);
+  font: 11.5px ui-monospace, Consolas, monospace; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+footer { display: flex; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--panel); }
+textarea { flex: 1; resize: none; background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font: inherit; }
+button { border: 1px solid var(--line); background: var(--panel2); color: var(--fg); border-radius: 7px; padding: 6px 11px; cursor: pointer; font: inherit; font-size: 13px; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #0b1220; border-color: var(--accent); font-weight: 600; }
+button.primary:disabled, button.danger:disabled { opacity: .45; cursor: default; }
+button.danger { border-color: var(--danger); color: #f0c2bf; }
+button.ghost { background: transparent; color: var(--dim); }

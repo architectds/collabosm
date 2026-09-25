@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>collabosm</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+  <aside>
+    <div class="brand">
+      <strong>collabosm</strong>
+      <span id="status" class="dot" title="checking"></span>
+    </div>
+    <button id="new" class="primary">New conversation</button>
+    <ul id="list"></ul>
+    <div class="foot">
+      <button id="export" class="ghost">Export</button>
+      <button id="import" class="ghost">Import</button>
+      <input id="file" type="file" accept="application/json" hidden />
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <div class="spacer"></div>
+      <label>dialect
+        <select id="dialect">
+          <option value="responses">responses</option>
+          <option value="chat">chat completions</option>
+        </select>
+      </label>
+      <label>model
+        <input id="model" spellcheck="false" />
+      </label>
+      <span id="endpoint" class="endpoint"></span>
+      <button id="stop" class="danger" disabled>Stop</button>
+    </header>
+
+    <section id="messages"></section>
+    <div id="metrics" class="metrics" title="measured by the local client while the stream passes; the API has no such field"></div>
+
+    <footer>
+      <textarea id="prompt" rows="3" placeholder="Message — Enter to send, Shift+Enter for a newline"></textarea>
+      <button id="send" class="primary">Send</button>
+    </footer>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
