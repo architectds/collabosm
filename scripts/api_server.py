@@ -354,6 +354,48 @@ class Handler(BaseHTTPRequestHandler):
         h = self.headers.get("Authorization", "") or ""
         return h == ("Bearer " + API_KEY) or h == API_KEY
 
+    def send_error(self, code, message=None, explain=None):
+        """Never answer with BaseHTTPRequestHandler's HTML error page.
+
+        The HTML 501 a client saw was produced by THIS process, not by a second
+        listener: an unread request body poisoned the keep-alive socket, and the
+        next "request line" was the previous JSON body, which the base class
+        reported as an unsupported method. Two listeners were never involved.
+        Every error path here answers JSON, so a protocol failure can never be
+        mistaken for a missing model.
+        """
+        try:
+            self._send(code, {"error": {"message": str(message or "request error"),
+                                        "type": "invalid_request_error"}})
+        except Exception:
+            pass
+
+    def _reject_method(self):
+        self._read_body()
+        return self._send(405, {"error": {"message": "method not allowed: %s" % self.command,
+                                          "type": "invalid_request_error"}})
+
+    def do_PUT(self):
+        return self._reject_method()
+
+    def do_PATCH(self):
+        return self._reject_method()
+
+    def do_DELETE(self):
+        return self._reject_method()
+
+    def do_HEAD(self):
+        self._read_body()
+        if self.path.startswith("/health"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "2")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            return
+        return self._send(405, {"error": {"message": "use GET",
+                                          "type": "invalid_request_error"}})
+
     def _read_body(self):
         """Consume the whole request body, however it is framed.
 
