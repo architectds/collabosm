@@ -71,8 +71,9 @@ One caveat that cost an hour of false alarms: `check_surface.py` still reports 5
 the live model because it deliberately sends a *tiny* prompt (`"hi"`, 29 tokens, `max_tokens: 64`)
 and this 4.05 bpw pack answers that with a single stop token -- `new=1 finish=stop` in the log --
 so the completion is empty. With a real prompt (Codex's ~8.5K-token context) the same server
-returns "pong" normally. The evaluation harness needs a real prompt, not "hi"; that is a checker
-fix for next time, not a server bug. Note the harness is still exactly right against a stubbed
+returns "pong" normally. The harness now takes `--prompt` and defaults to a real question (the "hi" default
+was the artifact), so a live run is comparable to a stub run - but note that a *stub* run
+of 13/13 proves the wire format, while a live run of 13/13 additionally proves the pack. Note the harness is still exactly right against a stubbed
 engine, which is what it was built for.
 
 ## Repository state
