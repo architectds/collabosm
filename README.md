@@ -142,3 +142,31 @@ RAM tier cannot extend live capacity.
 
 Our scripts: MIT (see `LICENSE`). The weights are **not** shipped here and carry their own licence —
 see `turboderp/Qwen3.8-Flash-Next-exl3` and `NOTICE`. ExLlamaV3 is MIT.
+
+## API surface
+
+The server is ours (`scripts/api_server.py`) - ExLlamaV3 ships no HTTP server. It answers
+both OpenAI dialects, and **every** error path is JSON (an HTML error page is a bug, not a
+client problem):
+
+| endpoint | notes |
+|---|---|
+| `POST /v1/chat/completions` | `choices[].message.content`, `finish_reason` = `stop`/`length`, `usage.prompt_tokens_details.cached_tokens`; `stream: true` returns SSE chunks + `[DONE]` (+ usage with `stream_options.include_usage`) |
+| `POST /v1/responses` | minimal Responses surface: `status`, `output[].content[].text`, `output_text`, `usage.{input,output,total}_tokens` |
+| `GET /v1/models` | the one model id, with `created` |
+| `GET /health` | plain `ok`, unauthenticated |
+| anything else | JSON 404 / 405 (never HTML) |
+
+Accepted: `max_tokens` and `max_completion_tokens`, `temperature`, `top_p`, `stop`
+(string or list), `stream`, `stream_options.include_usage`.
+
+**Thinking** is off by default, because that is what plain chat clients expect. Turn it on
+with `enable_thinking: true` or `reasoning_effort: xhigh|medium|low` (the pack's own template
+takes both); the trace is returned in `message.reasoning_content` and never leaks into
+`content`.
+
+### Keeping the URL stable
+
+The default tunnel is a Cloudflare **quick tunnel**, so the hostname changes on every restart.
+Use a named tunnel (`cloudflared tunnel run <name>`, with a token or `cert.pem`) if you want a
+fixed address; nothing else in this kit depends on the URL.
