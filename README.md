@@ -299,12 +299,17 @@ API key  : anything (the proxy injects the real one)
 model    : qwen3.8-flash-next-exl3
 ```
 
-For Open WebUI, which is the natural fit: `uv tool install open-webui`, then
-Settings -> Connections -> OpenAI API with the values above. It talks to the proxy from its own
-backend, uses `/v1/chat/completions` (not the Responses dialect, which is Codex's), and brings
-multi-conversation itself -- which is why this repo does not try to be a chat app.
-The measured recipe -- where it installs, which environment variables matter, what the first
-run does, and what it costs on a metered A100 -- is in [docs/OPEN-WEBUI.md](docs/OPEN-WEBUI.md).
+**This repo now ships its own frontend** -- and still does not *write* a chat app. `frontend/` is
+our shell (`shell.html` + `server.py`, the only two files we own) wrapped around a llama.cpp Web UI
+vendored byte for byte: our diff against upstream is zero. The shell puts the card/recipe picker,
+the provisioning progress and the wire-level metrics in a collapsible right rail, and embeds the
+WebUI in an iframe. Run it with `python frontend/server.py`; see
+[frontend/UPSTREAM.md](frontend/UPSTREAM.md) for the pinned upstream commit and how to rebuild it.
+
+Any other OpenAI-compatible client works too: `uv tool install open-webui`, then
+Settings -> Connections -> OpenAI API with the values above. That path is now **deprecated** -- it
+costs ~3.9 GB on disk and needs Python 3.11 + torch -- see [docs/OPEN-WEBUI.md](docs/OPEN-WEBUI.md)
+for the measured numbers if you still want it.
 
 Two gaps to know about before pointing anything at it:
 

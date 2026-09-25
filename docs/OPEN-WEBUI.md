@@ -1,3 +1,10 @@
+> **Deprecated (2026-09-25).** This was the first frontend experiment and it worked, but it costs
+> ~3.9 GB on disk (1.82 GB tool env + 2.07 GB uv cache) and needs Python 3.11 + torch. That install
+> was deleted; the lane was verified end to end, including image input, so the numbers below are
+> real -- keep this as the record of what that lane costs. The shipped frontend is now `frontend/`:
+> our shell around an unmodified llama.cpp Web UI ([frontend/UPSTREAM.md](../frontend/UPSTREAM.md)).
+> Use that unless you specifically want Open WebUI's multi-user/RAG features.
+
 # Open WebUI against collabosm, measured
 
 The division of labour is deliberate: **Open WebUI owns chat, this repo owns the adapter and the
