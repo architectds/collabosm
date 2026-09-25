@@ -42,6 +42,14 @@ if os.path.isdir(os.path.join(SRC, "examples")):
 from exllamav3 import Generator, model_init  # noqa: E402
 
 try:
+    from exllamav3.generator import Job  # noqa: E402
+except Exception:  # pragma: no cover - older builds
+    try:
+        from exllamav3.generator.job import Job  # noqa: E402
+    except Exception:
+        Job = None
+
+try:
     from jinja2 import Template as JTemplate
 except Exception:
     JTemplate = None
@@ -248,19 +256,58 @@ def render_chat(messages, template_kwargs=None):
     return "".join(parts), "chatml"
 
 
-def generate(prompt, max_tokens, temperature=None, top_p=None, stops=None):
-    # end the turn at <|im_end|>/EOS instead of running to max_tokens
+LAST = {}
+
+
+def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=None):
+    """Yield decoded text fragments from exllamav3 as they are produced.
+
+    Real streaming goes through enqueue() + iterate(): iterate() reports a
+    "streaming" stage result for every decode step, so the HTTP layer can forward
+    text while the job is still running. generate() cannot do that -- it
+    accumulates the completion internally and returns only once the job is done,
+    which is why this server used to go silent and then emit one blob.
+
+    Every exllamav3-version-specific detail lives in here. Callers only ever see a
+    fragment iterator, and the terminal metrics land in LAST.
+    """
+    stops_all = list(STOP_IDS) + ["<|im_end|>"] + list(stops or [])
+    LAST.clear()
+    try:
+        input_ids = TOK.encode(prompt, encode_special_tokens=False, add_bos=True)
+    except TypeError:
+        input_ids = TOK.encode(prompt, add_bos=True)
+    n_prompt = int(input_ids.shape[-1]) if hasattr(input_ids, "shape") else len(input_ids)
+    LAST["prompt_tokens"] = n_prompt
+    job = Job(input_ids=input_ids,
+              max_new_tokens=max_tokens,
+              stop_conditions=stops_all)
+    serial = GEN.enqueue(job)
+    while GEN.num_remaining_jobs():
+        for r in GEN.iterate():
+            if r.get("stage") == "error":
+                # A contained per-job failure. Surface it rather than returning a
+                # silently truncated completion.
+                raise r["error"]
+            if r.get("stage") != "streaming" or r.get("serial") != serial:
+                continue
+            frag = r.get("text") or ""
+            if frag:
+                yield frag
+            if r.get("eos"):
+                LAST["new_tokens"] = r.get("new_tokens")
+                LAST["eos_reason"] = r.get("eos_reason")
+                LAST["prompt_tokens"] = r.get("prompt_tokens") or n_prompt
+
+
+def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None, stops=None):
+    """The old one-shot path, kept as the fallback for builds whose Job API differs."""
     kw = {"stop_conditions": list(STOP_IDS) + ["<|im_end|>"] + list(stops or [])}
     if temperature is not None:
         kw["temperature"] = float(temperature)
     if top_p is not None:
         kw["top_p"] = float(top_p)
     with LOCK:
-        # generate() returns (completions, last_results). Reading "text" out of
-        # last_results gives only the FINAL fragment of the completion -- that is
-        # the bug that made this server answer " inputs" to a real question.
-        # completion_only=True excludes the echoed prompt; the except path strips
-        # it by hand for builds that do not accept the flag.
         try:
             try:
                 comp, last = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
@@ -285,6 +332,65 @@ def generate(prompt, max_tokens, temperature=None, top_p=None, stops=None):
     last = dict(last)
     last["text"] = clean_completion(comp or "")
     return last
+
+
+def collect(prompt, max_tokens, temperature=None, top_p=None, stops=None,
+            on_delta=None):
+    """The one engine entry point, for streaming and non-streaming alike.
+
+    on_delta(cumulative_clean_text) is called while the model is still decoding;
+    pass None for a one-shot generation. Returns the same metrics dict the old
+    generate() did, so non-streaming callers are unchanged.
+    """
+    buf = []
+    try:
+        with LOCK:
+            for frag in _engine_fragments(prompt, max_tokens, temperature, top_p, stops):
+                buf.append(frag)
+                if on_delta is not None:
+                    on_delta(clean_completion("".join(buf)))
+    except TypeError as exc:
+        print("[api] enqueue path failed (%r); falling back to blocking generate()"
+              % exc, flush=True)
+        return _generate_blocking(prompt, max_tokens, temperature, top_p, stops)
+    out = dict(LAST)
+    out["text"] = clean_completion("".join(buf))
+    return out
+
+
+def generate(prompt, max_tokens, temperature=None, top_p=None, stops=None):
+    """One-shot generation; kept because callers and diagnostics still use it."""
+    return collect(prompt, max_tokens, temperature, top_p, stops)
+
+
+class _Delta:
+    """Turn a cumulative completion into ordered reasoning/content deltas.
+
+    Thinking is split on the LAST </think> exactly as the non-streaming path does,
+    so a client that streams and a client that does not end up with the same
+    answer. A fragment that would require retracting bytes already sent is dropped
+    instead: an SSE stream cannot unsend.
+    """
+
+    def __init__(self):
+        self.sent_reasoning = ""
+        self.sent_content = ""
+        self.content_started = False
+
+    def feed(self, accumulated):
+        reasoning, answer = split_thinking(accumulated)
+        out = []
+        if (not self.content_started
+                and reasoning.startswith(self.sent_reasoning)
+                and len(reasoning) > len(self.sent_reasoning)):
+            out.append(("reasoning", reasoning[len(self.sent_reasoning):]))
+            self.sent_reasoning = reasoning
+        if answer.startswith(self.sent_content) and len(answer) > len(self.sent_content):
+            if answer:
+                self.content_started = True
+            out.append(("content", answer[len(self.sent_content):]))
+            self.sent_content = answer
+        return out
 
 
 def responses_messages(req):
@@ -506,56 +612,86 @@ class Handler(BaseHTTPRequestHandler):
         stop = req.get("stop")
         stops = [stop] if isinstance(stop, str) else list(stop or [])
 
-        try:
-            r = generate(prompt, max_tokens, req.get("temperature"), req.get("top_p"),
-                         stops=stops)
-        except Exception as exc:
-            traceback.print_exc()
-            return self._send(500, {"error": {"message": repr(exc)}})
-
-        reasoning, text = split_thinking(r.get("text") or "")
-        pt = r.get("prompt_tokens") or 0
-        ct = r.get("cached_tokens") or 0
-        nt = r.get("new_tokens") or 0
-        hit = (100.0 * ct / pt) if pt else 0.0
-        reason = r.get("eos_reason") or ""
-        finish = "length" if reason == "max_new_tokens" else "stop"
-        print("[api] template=%s prompt=%d cached=%d (%.1f%% hit) new=%d finish=%s"
-              % (how, pt, ct, hit, nt, finish), flush=True)
-
         cid = "chatcmpl-%d" % int(time.time() * 1000)
+        model = req.get("model", "qwen3.8-flash-next-exl3")
+
+        def finish_reason(r):
+            return "length" if (r.get("eos_reason") or "") == "max_new_tokens" else "stop"
+
+        def report(r):
+            pt_ = r.get("prompt_tokens") or 0
+            ct_ = r.get("cached_tokens") or 0
+            nt_ = r.get("new_tokens") or 0
+            hit = (100.0 * ct_ / pt_) if pt_ else 0.0
+            print("[api] template=%s prompt=%d cached=%d (%.1f%% hit) new=%d finish=%s"
+                  % (how, pt_, ct_, hit, nt_, finish_reason(r)), flush=True)
+
+        def usage_for(r):
+            pt_ = r.get("prompt_tokens") or 0
+            ct_ = r.get("cached_tokens") or 0
+            nt_ = r.get("new_tokens") or 0
+            return {"prompt_tokens": pt_, "completion_tokens": nt_,
+                    "total_tokens": pt_ + nt_,
+                    "prompt_tokens_details": {"cached_tokens": ct_}}
+
+        def chunk(delta, finish=None):
+            return {"id": cid, "object": "chat.completion.chunk",
+                    "created": int(time.time()), "model": model,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+
         if not stream:
+            try:
+                r = collect(prompt, max_tokens, req.get("temperature"),
+                            req.get("top_p"), stops)
+            except Exception as exc:
+                traceback.print_exc()
+                return self._send(500, {"error": {"message": repr(exc)}})
+            reasoning, text = split_thinking(r.get("text") or "")
+            report(r)
             return self._send(200, {
                 "id": cid, "object": "chat.completion", "created": int(time.time()),
-                "model": req.get("model", "qwen3.8-flash-next-exl3"),
-                "choices": [{"index": 0, "finish_reason": finish,
+                "model": model,
+                "choices": [{"index": 0, "finish_reason": finish_reason(r),
                              "message": assistant_message(text, reasoning)}],
-                "usage": {"prompt_tokens": pt, "completion_tokens": nt,
-                          "total_tokens": pt + nt,
-                          "prompt_tokens_details": {"cached_tokens": ct}}})
+                "usage": usage_for(r)})
 
-        # Streaming: this build has no incremental callback here, so the whole
-        # completion is delivered as one delta followed by [DONE]. Clients that
-        # only need SSE framing are happy; there is no token-by-token typing.
+        # Genuinely incremental: text is forwarded while the engine decodes it,
+        # rather than being chunked up after the completion is already finished.
         self._sse_start()
-        for chunk in (
-            {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
-             "model": req.get("model", "qwen3.8-flash-next-exl3"),
-             "choices": [{"index": 0, "delta": assistant_delta(text, reasoning),
-                          "finish_reason": None}]},
-            {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
-             "model": req.get("model", "qwen3.8-flash-next-exl3"),
-             "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
-        ):
-            self._sse_write("data: " + json.dumps(chunk) + "\n\n")
+        delta = _Delta()
+        started = [False]
+
+        def emit(deltas):
+            for kind, piece in deltas:
+                if not started[0]:
+                    self._sse_write("data: " + json.dumps(
+                        chunk({"role": "assistant", "content": ""})) + "\n\n")
+                    started[0] = True
+                if kind == "reasoning":
+                    self._sse_write("data: " + json.dumps(
+                        chunk({"reasoning_content": piece})) + "\n\n")
+                else:
+                    self._sse_write("data: " + json.dumps(
+                        chunk({"content": piece})) + "\n\n")
+
+        try:
+            r = collect(prompt, max_tokens, req.get("temperature"), req.get("top_p"),
+                        stops, on_delta=lambda acc: emit(delta.feed(acc)))
+        except Exception as exc:
+            traceback.print_exc()
+            self._sse_write("data: " + json.dumps(
+                {"error": {"message": repr(exc)}}) + "\n\n")
+            self._sse_write("data: [DONE]\n\n")
+            return self._sse_end()
+        emit(delta.feed(r.get("text") or ""))
+        report(r)
+        self._sse_write("data: " + json.dumps(chunk({}, finish_reason(r))) + "\n\n")
         so = req.get("stream_options")
         if isinstance(so, dict) and so.get("include_usage"):
             self._sse_write("data: " + json.dumps({
-                "id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
-                "model": req.get("model", "qwen3.8-flash-next-exl3"), "choices": [],
-                "usage": {"prompt_tokens": pt, "completion_tokens": nt,
-                          "total_tokens": pt + nt,
-                          "prompt_tokens_details": {"cached_tokens": ct}}}) + "\n\n")
+                "id": cid, "object": "chat.completion.chunk",
+                "created": int(time.time()), "model": model, "choices": [],
+                "usage": usage_for(r)}) + "\n\n")
         self._sse_write("data: [DONE]\n\n")
         self._sse_end()
 
@@ -565,43 +701,168 @@ class Handler(BaseHTTPRequestHandler):
 
         Clients probe both this and /v1/chat/completions; answering only one of
         them is what produced "supports neither Responses nor Chat Completions".
+
+        Codex's Responses parser binds every delta to an item it was told about
+        and will not accept a stream that ends without a terminal event, so the
+        whole lifecycle is emitted: created -> in_progress -> [reasoning item] ->
+        message item -> deltas -> done -> completed. Every event carries
+        sequence_number, and the ids in the terminal event are the same ids the
+        stream announced.
         """
         msgs = responses_messages(req)
         prompt, how = render_chat(msgs, template_kwargs_from(req))
         max_tokens = int(req.get("max_output_tokens") or req.get("max_tokens") or 512)
-        r = generate(prompt, max_tokens, req.get("temperature"), req.get("top_p"))
-        reasoning, text = split_thinking(r.get("text") or "")
-        nt = r.get("new_tokens") or 0
-        pt = r.get("prompt_tokens") or 0
-        print("[api] /v1/responses template=%s prompt=%d new=%d" % (how, pt, nt),
-              flush=True)
+        stream = bool(req.get("stream"))
         now = int(time.time())
-        payload = {
-            "id": "resp_%d" % int(time.time() * 1000),
-            "object": "response",
-            "created_at": now,
-            "status": "completed",
-            "model": req.get("model", "qwen3.8-flash-next-exl3"),
-            "output": [{"id": "msg_%d" % (now * 1000 + 1), "type": "message",
-                        "role": "assistant", "status": "completed",
-                        "content": [{"type": "output_text", "text": text,
-                                     "annotations": []}]}],
-            "output_text": text,
-            "reasoning": ({"summary": [{"type": "summary_text", "text": reasoning}]}
-                          if reasoning else None),
-            "usage": {"input_tokens": pt, "output_tokens": nt,
-                      "total_tokens": pt + nt},
-        }
-        if not req.get("stream"):
-            return self._send(200, payload)
-        started = dict(payload, status="in_progress", output=[])
+        model = req.get("model", "qwen3.8-flash-next-exl3")
+        base = now * 1000
+        rid = "resp_%d" % base
+        mid = "msg_%d" % (base + 1)
+        rsn_id = "rs_%d" % (base + 2)
+
+        def payload_for(r, text, reasoning):
+            pt = r.get("prompt_tokens") or 0
+            nt = r.get("new_tokens") or 0
+            output = []
+            if reasoning:
+                output.append({"id": rsn_id, "type": "reasoning", "status": "completed",
+                               "summary": [{"type": "summary_text", "text": reasoning}]})
+            output.append({"id": mid, "type": "message", "role": "assistant",
+                           "status": "completed",
+                           "content": [{"type": "output_text", "text": text,
+                                        "annotations": []}]})
+            return {
+                "id": rid,
+                "object": "response",
+                "created_at": now,
+                "status": "completed",
+                "model": model,
+                "output": output,
+                "output_text": text,
+                "parallel_tool_calls": True,
+                "tool_calls": [],
+                "reasoning": ({"summary": [{"type": "summary_text", "text": reasoning}]}
+                              if reasoning else None),
+                "usage": {"input_tokens": pt, "output_tokens": nt,
+                          "total_tokens": pt + nt,
+                          "input_tokens_details": {"cached_tokens": r.get("cached_tokens") or 0},
+                          "output_tokens_details": {"reasoning_tokens": 0}},
+                "incomplete_details": None,
+                "error": None,
+            }
+
+        if not stream:
+            try:
+                r = collect(prompt, max_tokens, req.get("temperature"), req.get("top_p"))
+            except Exception as exc:
+                traceback.print_exc()
+                return self._send(500, {"error": {"message": repr(exc)}})
+            reasoning, text = split_thinking(r.get("text") or "")
+            print("[api] /v1/responses template=%s prompt=%s new=%s"
+                  % (how, r.get("prompt_tokens"), r.get("new_tokens")), flush=True)
+            return self._send(200, payload_for(r, text, reasoning))
+
+        seq = [0]
+
+        def ev(name, obj):
+            body = dict(obj)
+            body["type"] = name
+            body["sequence_number"] = seq[0]
+            seq[0] += 1
+            self._sse_event(name, body)
+
         self._sse_start()
-        for ev, data in (("response.created", started),
-                         ("response.output_text.delta",
-                          {"type": "response.output_text.delta", "delta": text,
-                           "output_index": 0, "content_index": 0}),
-                         ("response.completed", payload)):
-            self._sse_event(ev, data)
+        rmeta = {"id": rid, "object": "response", "created_at": now, "model": model,
+                 "status": "in_progress", "output": []}
+        ev("response.created", {"response": rmeta})
+        ev("response.in_progress", {"response": rmeta})
+
+        delta = _Delta()
+        state = {"open": None, "idx": 0}
+
+        def reasoning_item(status, text):
+            return {"id": rsn_id, "type": "reasoning", "status": status,
+                    "summary": ([{"type": "summary_text", "text": text}] if text else [])}
+
+        def message_item(status, text):
+            return {"id": mid, "type": "message", "role": "assistant", "status": status,
+                    "content": ([{"type": "output_text", "text": text,
+                                  "annotations": []}] if text else [])}
+
+        def close_reasoning():
+            if state["open"] != "reasoning":
+                return
+            ev("response.reasoning_text.done",
+               {"item_id": rsn_id, "output_index": state["idx"], "content_index": 0,
+                "text": delta.sent_reasoning})
+            ev("response.output_item.done",
+               {"output_index": state["idx"],
+                "item": reasoning_item("completed", delta.sent_reasoning)})
+            state["open"] = None
+            state["idx"] += 1
+
+        def open_message():
+            if state["open"] == "message":
+                return
+            ev("response.output_item.added",
+               {"output_index": state["idx"], "item": message_item("in_progress", "")})
+            ev("response.content_part.added",
+               {"item_id": mid, "output_index": state["idx"], "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []}})
+            state["open"] = "message"
+
+        def close_message(text):
+            if state["open"] != "message":
+                return
+            ev("response.output_text.done",
+               {"item_id": mid, "output_index": state["idx"], "content_index": 0,
+                "text": text})
+            ev("response.content_part.done",
+               {"item_id": mid, "output_index": state["idx"], "content_index": 0,
+                "part": {"type": "output_text", "text": text, "annotations": []}})
+            ev("response.output_item.done",
+               {"output_index": state["idx"], "item": message_item("completed", text)})
+            state["open"] = None
+
+        def emit(deltas):
+            for kind, piece in deltas:
+                if kind == "reasoning":
+                    if state["open"] is None:
+                        ev("response.output_item.added",
+                           {"output_index": state["idx"],
+                            "item": reasoning_item("in_progress", "")})
+                        state["open"] = "reasoning"
+                    if state["open"] == "reasoning":
+                        ev("response.reasoning_text.delta",
+                           {"item_id": rsn_id, "output_index": state["idx"],
+                            "content_index": 0, "delta": piece})
+                else:
+                    close_reasoning()
+                    open_message()
+                    ev("response.output_text.delta",
+                       {"item_id": mid, "output_index": state["idx"],
+                        "content_index": 0, "delta": piece})
+
+        try:
+            r = collect(prompt, max_tokens, req.get("temperature"), req.get("top_p"),
+                        on_delta=lambda acc: emit(delta.feed(acc)))
+        except Exception as exc:
+            traceback.print_exc()
+            ev("response.failed", {"response": {
+                "id": rid, "object": "response", "created_at": now, "model": model,
+                "status": "failed",
+                "error": {"code": "server_error", "message": repr(exc)}}})
+            return self._sse_end()
+
+        final = r.get("text") or ""
+        reasoning, text = split_thinking(final)
+        emit(delta.feed(final))
+        close_reasoning()
+        open_message()
+        close_message(text)
+        print("[api] /v1/responses template=%s prompt=%s new=%s"
+              % (how, r.get("prompt_tokens"), r.get("new_tokens")), flush=True)
+        ev("response.completed", {"response": payload_for(r, text, reasoning)})
         self._sse_end()
 
 

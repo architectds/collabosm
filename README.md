@@ -69,6 +69,8 @@ SESSION=mybox CACHE_SIZE=524288 CPU_CACHE_GB=8 bash scripts/up.sh
 | `scripts/serve.sh` | launch the API + cloudflared tunnel (runs on the VM) |
 | `scripts/api_server.py` | minimal OpenAI-compatible server; **one long-lived Generator** |
 | `scripts/status.py` | one-glance stage/health report |
+| `scripts/dev_stub.py` | serves the real Handler on loopback with a stubbed engine: exercises the wire format with no GPU and no weights |
+| `scripts/check_surface.py` | drives a running server over HTTP and judges the surface (deltas, terminal event, ids, sequence numbers) |
 | `manifest.json` | every pinned revision, size and measured number |
 | `docs/MEASURED.md` | the measurements, with provenance and caveats |
 | `docs/RUNBOOK.md` | the traps, the protocols, the cost guardrails |
@@ -113,12 +115,49 @@ On 2026-09-25, on one account, with no manual steps beyond the scripts in here:
 
 Known gaps, stated plainly:
 
-- **No token-by-token streaming.** A `stream: true` request is delivered as one delta followed by
-  `[DONE]`, so clients work but text appears all at once.
+- **Streaming is incremental now.** `collect()` drives `Generator.enqueue()` / `iterate()` and
+  forwards every decode step, so both `/v1/chat/completions` and `/v1/responses` emit text while
+  the model is still working. Verified locally through a real Codex CLI client: first delta at
+  0.01 s, 11 deltas, terminal `response.completed` present, `sequence_number` monotonic. The old
+  one-shot path survives as `_generate_blocking()` and is used only if a build's Job API differs.
 - **Requests are serialised** by a lock — one Generator, one cache. "Multiple streams" today means
   queued, not parallel.
 - **`max_batch_size > 1` is untested.** Every measurement ran `num_slots = 1`.
 - Session *assignment* is scripted; it is not yet a configurable hosting layer.
+
+## Testing it without a GPU
+
+The thing that keeps breaking is the *protocol*, and proving a protocol change used to cost a
+session restore plus a four-minute weight load. Two scripts remove that cost:
+
+```bash
+python scripts/dev_stub.py --port 8099 --chunk 24 --delay 0.01   # real Handler, fake engine
+python scripts/check_surface.py --base http://127.0.0.1:8099/v1  # 13 checks, exits 1 on failure
+```
+
+`dev_stub.py` imports the shipping `Handler` and replaces only `_engine_fragments()`, so the code
+under test is the code that deploys. `check_surface.py` asserts what clients actually depend on:
+deltas arrive before the end, a terminal event is sent, every delta carries `item_id` /
+`output_index` / `content_index`, `sequence_number` is monotonic, and the chat and Responses views
+of the same completion agree word for word.
+
+Point a real client at it too -- this is the fastest way to learn that a stream is shaped wrong:
+
+```toml
+# CODEX_HOME/config.toml
+model = "qwen3.8-flash-next-exl3"
+model_provider = "collabosm"
+preferred_auth_method = "apikey"
+
+[model_providers.collabosm]
+name = "collabosm"
+base_url = "http://127.0.0.1:8099/v1"
+wire_api = "responses"
+env_key = "COLLABOSM_TEST_KEY"
+```
+
+Add `--think` to `dev_stub.py` to exercise the reasoning item lifecycle. Both shapes were accepted
+by Codex CLI 0.144.6 (`codex exec --skip-git-repo-check 'Reply with exactly: pong'`).
 
 ## How many sessions fit
 
