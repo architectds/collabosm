@@ -140,8 +140,8 @@ def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=F
         api_server.LAST["eos_reason"] = "stop_token"
 
     def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None,
-                           stops=None):
-        """The one-shot path the server falls back to."""
+                           stops=None, embeddings=None):
+        """The one-shot path the server falls back to (same signature as shipped)."""
         if delay:
             time.sleep(delay * 3)
         return {"text": text, "prompt_tokens": 29, "cached_tokens": 0,

@@ -25,9 +25,16 @@ def record(name, ok, detail=""):
     print("%-34s %s %s" % (name, "PASS" if ok else "FAIL", detail), flush=True)
 
 
+def connect(u, timeout):
+    """HTTPS for a tunnel URL, plain HTTP for loopback -- the scheme decides."""
+    if u.scheme == "https":
+        return http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout)
+    return http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+
+
 def request(base, path, body=None, key=None, method=None, timeout=300):
     u = urllib.parse.urlparse(base)
-    conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+    conn = connect(u, timeout)
     headers = {"Content-Type": "application/json", "Accept": "*/*"}
     if key:
         headers["Authorization"] = "Bearer " + key
