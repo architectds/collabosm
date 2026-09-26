@@ -154,6 +154,42 @@ api_server.py on 127.0.0.1:8090  ->  cloudflared --url http://127.0.0.1:8090
   into a 24 h one. Run `bash scripts/down.sh` when you stop working, and check `colab sessions`.
 - Colab idle-prunes an unattended VM after roughly 90 minutes; a long GPU run counts as activity.
 
+## The frontend control plane (`frontend/control.py`)
+
+The shell's right column is drawn from one object, and `control.py` is the real one. Facts that cost
+time to learn:
+
+- **The Colab CLI is Linux-only.** `uv tool install google-colab-cli` has no Windows build, so the
+  Windows frontend shells out: `wsl.exe -d Ubuntu -- bash -lc "<cd /mnt/e/... && up.sh>"`. Two things
+  that bite: `wsl.exe` prints *its own* messages as UTF-16 (set `WSL_UTF8=1`, or every line looks like
+  `N A M E`), and the path it needs is the WSL one (`E:\models\collabosm` -> `/mnt/e/models/collabosm`).
+  All `.sh` files here are LF; a CRLF script fails in WSL with `\r` errors.
+- **Billing starts at the click, not at the load.** The ledger opens its record when the job is
+  spawned (that is when `assign` happens), and closes it on `down`, failure or the safety stops. A
+  drawn-and-rejected 40 GB box therefore costs ~0.13 CU, and the ledger says so.
+- **The confirmation gate is the product.** `select()` without `confirm: true` returns
+  `confirm_required` with CU/h, ETA and the cost of the load itself; a UI that skips the gate is a UI
+  that spends CU on a mis-click.
+- **Stages only move forward.** `up.sh` relays `scripts/status.py` rows, and a relayed
+  `stage=probing` after `stage=loading` used to drag the rail backwards while the bar stayed at 60%.
+  `_set_stage()` now refuses to regress, and the bar has a time-based floor because `up.sh` sleeps
+  45 s between polls.
+- **Two safety stops, both visible in the rail**: `--idle-stop-min` (default 20 min without chat
+  traffic) and `--max-session-h` (default 6 h even with traffic). Chat traffic is anything the frontend
+  proxies to `/v1/*`, so a long generation counts as activity.
+- **Rehearse without CU.** `--fake-provision` keeps the real control plane and replaces only the WSL
+  process with `frontend/fake_provision.py` (same log lines, ~24 s, no network). `--mock` swaps in the
+  demo pacing. Both were used to verify the confirm gate, the stages, the ready card, the proxy and the
+  stop path before a single CU was spent.
+- **The upstream WebUI registers a service worker at scope `/`.** A shell cached by an older build came
+  back as a *second* copy of the rail inside the iframe (and the old prototype on port 3010 was still
+  serving that build). `shell.html` now unregisters service workers and drops caches on load; the stale
+  prototype servers are gone. If a duplicate panel ever appears again, check the URL and the port
+  first -- `http://127.0.0.1:<frontend-port>/` is the only current page.
+- **One window.** `python collabosm.py start` opens the frontend shell when something answers on
+  `--frontend-port` (default 3020) and only falls back to the older two-window chat/status pair when it
+  does not.
+
 ## Installing the CLI, and the one thing that breaks it
 
 ```bash
