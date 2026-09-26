@@ -181,6 +181,11 @@ time to learn:
   process with `frontend/fake_provision.py` (same log lines, ~24 s, no network). `--mock` swaps in the
   demo pacing. Both were used to verify the confirm gate, the stages, the ready card, the proxy and the
   stop path before a single CU was spent.
+- **A rehearsal must not touch the money ledger.** A fake run started without `--state-dir` wrote an
+  *open session* into `~/.collabosm/ledger.json` and the rail then charged CU for a VM that never
+  existed. Fake control planes now default to `.tmp/state-rehearsal/ledger.json`; only a real control
+  plane writes `~/.collabosm`. If the CU number ever looks wrong, read that file first -- one entry per
+  session, with the reason it closed.
 - **The upstream WebUI registers a service worker at scope `/`.** A shell cached by an older build came
   back as a *second* copy of the rail inside the iframe (and the old prototype on port 3010 was still
   serving that build). `shell.html` now unregisters service workers and drops caches on load; the stale
