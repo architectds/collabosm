@@ -532,6 +532,10 @@ def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=No
                 LAST["new_tokens"] = r.get("new_tokens")
                 LAST["eos_reason"] = r.get("eos_reason")
                 LAST["prompt_tokens"] = r.get("prompt_tokens") or n_prompt
+                # Without this, usage and the log line report a 0% prompt-cache hit
+                # on every request -- which is exactly what a cold Generator looks
+                # like, the one misdiagnosis this server is built to rule out.
+                LAST["cached_tokens"] = r.get("cached_tokens") or 0
 
 
 def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None, stops=None,
@@ -589,12 +593,14 @@ def collect(prompt, max_tokens, temperature=None, top_p=None, stops=None,
                 buf.append(frag)
                 if on_delta is not None:
                     on_delta(clean_completion("".join(buf)))
+            # Snapshot while this request still owns the engine: the next request
+            # clears LAST the moment it takes the lock.
+            out = dict(LAST)
     except TypeError as exc:
         print("[api] enqueue path failed (%r); falling back to blocking generate()"
               % exc, flush=True)
         return _generate_blocking(prompt, max_tokens, temperature, top_p, stops,
                                   embeddings)
-    out = dict(LAST)
     out["text"] = clean_completion("".join(buf))
     if not out["text"].strip():
         # Never answer empty. The incremental path can yield nothing if a build's
