@@ -31,7 +31,11 @@ import io
 import ipaddress
 import json
 import os
+import re
+import secrets
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -88,12 +92,40 @@ IMAGE_URLS = os.environ.get("IMAGE_URLS", "0") == "1"
 MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", 12 * 1024 * 1024))
 MAX_IMAGES = int(os.environ.get("MAX_IMAGES", 8))
 
+# Thinking is not budgeted separately. The template's `reasoning_effort` picks how
+# hard the model thinks, not how much it may spend; the only cap is the new-token
+# allowance, shared with the answer. So the default has to be generous: 512 used to
+# truncate long answers, and when it truncated a *thought* the half-finished
+# reasoning came back as if it were the reply.
+MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", 32768))
+
+# The pack's template takes enable_thinking (false pre-closes the think block, so the
+# model answers directly). Off by default is what plain chat clients expect; a
+# deployment that exists to serve a coding agent can set THINKING_DEFAULT=1 so every
+# request that does not say otherwise gets the trace.
+THINKING_DEFAULT = os.environ.get("THINKING_DEFAULT", "0").lower() in ("1", "true", "yes", "on")
+
+# The recipes.json entry this box was launched from (scripts/recipe.py -> up.sh ->
+# bootstrap.sh -> serve.sh): reported, so a client knows which card+model it is.
+RECIPE = os.environ.get("RECIPE") or None
+# YaRN over the native window, the way the model card documents it (see apply_yarn).
+# 0 = native context only.
+YARN_FACTOR = float(os.environ.get("YARN_FACTOR", 0) or 0)
+# Requests are serialised (module docstring, point 2). A recipe that asks for more
+# is reported as asked-for and not honoured, rather than silently dropped.
+CONCURRENCY = int(os.environ.get("CONCURRENCY", 1) or 1)
+
 # What the server was launched with, for the read-only status contract.
 LAUNCH = {}
+ROPE = {}
 
 
 class MMUnavailable(Exception):
     """A request carries an image this server cannot (or will not) embed."""
+
+
+class ContextTooLong(Exception):
+    """The prompt alone leaves no room in the cache for an answer."""
 
 # --- auth ---------------------------------------------------------------------
 # serve.sh creates /content/api-key.txt and then publishes the port through a
@@ -158,45 +190,112 @@ def template_kwargs_from(req):
 
     The template takes `enable_thinking` (false pre-closes the think block, so the
     model answers directly) and `reasoning_effort` (xhigh | medium | low). Default
-    here is thinking OFF, which is what plain chat clients expect; turn it on with
+    is THINKING_DEFAULT (OFF unless the deployment asked for it); turn it on with
     enable_thinking: true or a reasoning_effort value.
+
+    Three shapes arrive in practice and all three are read here:
+
+    * `enable_thinking` / `chat_template_kwargs.reasoning_effort` -- this pack's own,
+    * a flat `reasoning_effort` -- what several OpenAI-compatible clients send,
+    * `reasoning: {"effort": ...}` -- the OpenAI Responses shape, and the one Codex
+      actually sends. Reading only the flat field is why a Codex turn ran with
+      thinking off while the header said "reasoning effort: xhigh".
     """
-    kw = {"enable_thinking": False}
+    kw = {"enable_thinking": THINKING_DEFAULT}
     if isinstance(req.get("enable_thinking"), bool):
         kw["enable_thinking"] = req["enable_thinking"]
+
+    def effort(eff):
+        # OpenAI's scale (minimal/low/medium/high, and xhigh) onto this template's
+        # three levels; "high" -- Codex's usual -- is thinking at the top level, not
+        # thinking off
+        if not isinstance(eff, str) or not eff:
+            return
+        eff = eff.strip().lower()
+        if eff in ("none", "minimal"):
+            kw["enable_thinking"] = False
+            kw.pop("reasoning_effort", None)
+            return
+        kw["enable_thinking"] = True
+        kw["reasoning_effort"] = {"low": "low", "medium": "medium",
+                                  "high": "xhigh", "xhigh": "xhigh"}.get(eff, "medium")
+
     ck = req.get("chat_template_kwargs")
     if isinstance(ck, dict):
         if isinstance(ck.get("enable_thinking"), bool):
             kw["enable_thinking"] = ck["enable_thinking"]
-        if ck.get("reasoning_effort") in ("xhigh", "medium", "low"):
-            kw["reasoning_effort"] = ck["reasoning_effort"]
-    eff = req.get("reasoning_effort")
-    if eff in ("xhigh", "medium", "low"):
-        kw["enable_thinking"] = True
-        kw["reasoning_effort"] = eff
+        effort(ck.get("reasoning_effort"))
+    effort(req.get("reasoning_effort"))
+    rsn = req.get("reasoning")
+    if isinstance(rsn, dict):
+        effort(rsn.get("effort"))
     return kw
 
 
-def split_thinking(text):
+# Markers this pack can emit around or instead of an answer that are not text a
+# client should ever see. The closing think tag is handled by split_thinking.
+STRAY_MARKERS = ("<|end|>", "<|im_end|>", "<|im_start|>", "<|endoftext|>",
+                 "<|eot_id|>", "<|start_header_id|>", "<|end_header_id|>")
+
+
+def split_thinking(text, thinking_on=False):
     """(reasoning, answer), reported the way Qwen/DeepSeek endpoints do.
 
     Split on the LAST </think>: when thinking is disabled the template pre-closes
     the think block, and the model can echo another closing marker, so the first
     one is not necessarily the real boundary. Any leftover marker is stripped from
     both halves.
+
+    With thinking on, the template has already written the opening <think>, so a
+    reply with no closing tag is still inside the block -- mid-thought. That matters
+    most for the streaming path, where a thought mislabelled as an answer has
+    already been sent as answer text before the mistake can be seen.
     """
     t = text or ""
     i = t.rfind(THINK_CLOSE)
     if i >= 0:
         reasoning, answer = t[:i], t[i + len(THINK_CLOSE):]
-    elif t.lstrip().startswith(THINK_OPEN):
+    elif thinking_on or t.lstrip().startswith(THINK_OPEN):
         reasoning, answer = t, ""
     else:
         reasoning, answer = "", t
     for marker in (THINK_OPEN, THINK_CLOSE):
         reasoning = reasoning.replace(marker, "")
         answer = answer.replace(marker, "")
+    for marker in STRAY_MARKERS:
+        reasoning = reasoning.replace(marker, "")
+        answer = answer.replace(marker, "")
     return reasoning.strip(), answer.strip()
+
+
+def truncated(r):
+    return (r.get("eos_reason") or "") == "max_new_tokens"
+
+
+def prompt_opens_think(prompt):
+    """Did the rendered prompt leave the model *inside* a think block?
+
+    That is a fact about the prompt, not about the request's flags: this pack's
+    template writes the opening <think> itself when thinking is on, and pre-closes
+    the block when it is off, so the tail of the prompt is the authority on which
+    state we are in. It is also the only signal that survives a request that asked
+    for one thing and a template that rendered another.
+    """
+    return bool(re.search(r"<think>\s*$", prompt or ""))
+
+
+def split_result(r, thinking_on):
+    """(reasoning, answer) for a finished generation, honest about truncation.
+
+    A reply that stopped on max_new_tokens without ever closing the think block is a
+    half-finished thought. Handing that back as `output_text` with status
+    "completed" is a lie the client cannot detect, so it stays in reasoning and the
+    caller marks the response incomplete.
+    """
+    text = (r.get("text") or "")
+    if thinking_on and truncated(r) and THINK_CLOSE not in text:
+        return split_thinking(text, True)[0], ""
+    return split_thinking(text, thinking_on)
 
 
 def assistant_delta(text, reasoning):
@@ -214,8 +313,108 @@ def assistant_message(text, reasoning):
     return msg
 
 
+def _on(value, default=False) -> bool:
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def engine_argv(env, model_dir):
+    """model_init's command line for one launch, and what it amounts to.
+
+    Pure, so recipes.json can be checked without a GPU. The n-gram table and the MTP
+    layer belong to the model, not the card: `-ngr` is only for a pack that ships
+    ngram_embedding.safetensors (Flash-Next does, the 27B does not), and NGRAM
+    unset means exactly that test.
+    """
+    gcs = int(env.get("GCS", 4096))
+    ndt = int(env.get("NDT", 4))
+    ccs = float(env.get("CPU_CACHE_GB", 0) or 0)
+    rcs = float(env.get("RECURRENT_CACHE_GB", 4) or 0)
+    ngram = str(env.get("NGRAM", "auto") or "auto").lower()
+    ngram_on = (os.path.exists(os.path.join(model_dir, "ngram_embedding.safetensors"))
+                if ngram == "auto" else _on(ngram))
+    mtp_on = _on(env.get("MTP"), default=True)
+    argv = ["serve", "-m", model_dir,
+            "-cs", str(env.get("CACHE_SIZE", 262144)),
+            "-cq", str(env.get("CACHE_QUANT", "4"))]
+    if ngram_on:
+        argv.append("-ngr")               # the n-gram/PLE table lives in host RAM
+    if mtp_on:
+        argv += ["-mtp", "-ndt", str(ndt)]
+    argv += ["-gcs", str(gcs), "-mode", env.get("CHAT_MODE", "chatml")]
+    if ccs:
+        argv += ["-ccs", str(ccs)]        # pinned-RAM second-tier KV page cache
+    if rcs:
+        argv += ["-rcs", str(rcs)]        # GDN checkpoint store (host RAM)
+    return argv, {
+        "cache_size": int(env.get("CACHE_SIZE", 262144)),
+        "cache_quant": str(env.get("CACHE_QUANT", "4")),
+        "generator_chunk_size": gcs,
+        "num_draft_tokens": ndt if mtp_on else 0,
+        "cpu_cache_gb": ccs,
+        "recurrent_cache_gb": rcs,
+        "mode": env.get("CHAT_MODE", "chatml"),
+        "mtp": mtp_on,
+        "ngram": ngram_on,
+    }
+
+
+def apply_yarn(model_dir, factor):
+    """Extend the context with YaRN, as the model card documents it: the text
+    model's `rope_parameters` (older packs: `rope_scaling`) becomes rope_type "yarn"
+    with `factor` over the native window, every other RoPE key kept (theta, partial
+    rotary factor, the interleaved mRoPE sections), and max_position_embeddings
+    raised to match. There is no command-line way: model_init has no RoPE flag.
+
+    The pack's own config.json is kept once as config.json.orig and every launch is
+    derived from it, so factor 0 (or a recipe without YaRN) puts the native RoPE
+    back: static YaRN costs a little on short prompts, the card warns, and a box must
+    not keep it after its recipe stops asking for it.
+    """
+    path = os.path.join(model_dir, "config.json")
+    orig = path + ".orig"
+    if not os.path.exists(path):
+        return {"yarn": False, "why": "no config.json"}
+    restored = factor <= 1 and os.path.exists(orig)
+    if restored:
+        shutil.copyfile(orig, path)
+    with open(orig if os.path.exists(orig) else path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    text = cfg["text_config"] if isinstance(cfg.get("text_config"), dict) else cfg
+    # exllamav3 reads rope_scaling before rope_parameters (the first non-null wins),
+    # so a pack that carries both is patched where it will be read
+    key = ("rope_scaling" if text.get("rope_scaling")
+           else "rope_parameters" if "rope_parameters" in text else "rope_scaling")
+    params = dict(text.get(key) or {})
+    native = int(text.get("max_position_embeddings") or 262144)
+    if params.get("rope_type") == "yarn" and params.get("original_max_position_embeddings"):
+        # already patched with no .orig beside it (a copied directory): its native
+        # window is the recorded one, not the raised one -- or the factor compounds
+        native = int(params["original_max_position_embeddings"])
+    if factor <= 1:
+        return dict({"yarn": False, "native": native, "max": native},
+                    **({"restored": True} if restored else {}))
+    if not os.path.exists(orig):
+        shutil.copyfile(path, orig)
+    params.update(rope_type="yarn", factor=float(factor),
+                  original_max_position_embeddings=native)
+    text[key] = params
+    # exllamav3 (util/rope.py) derives the factor as max_position_embeddings /
+    # original_max_position_embeddings whenever the latter is present, and ignores
+    # `factor`: the card's block alone is 262144/262144 = 1.0, a silent no-op. So the
+    # window is raised too, which every other reader agrees with.
+    text["max_position_embeddings"] = int(native * factor)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, indent=2)
+    os.replace(tmp, path)
+    return {"yarn": True, "factor": float(factor), "native": native,
+            "max": int(native * factor), "key": key}
+
+
 def build_engine():
-    """Load once, with the flags the repository measured as best."""
+    """Load once, with the flags the recipe carries (recipes.json)."""
     global GEN, TOK, ARGS, STOP_IDS, SERVER_STARTED
     SERVER_STARTED = int(time.time())
     parser = argparse.ArgumentParser(allow_abbrev=False)
@@ -229,34 +428,20 @@ def build_engine():
     ]:
         parser.add_argument(*flags, **kw)
 
-    gcs = int(os.environ.get("GCS", 4096))
-    ndt = int(os.environ.get("NDT", 4))
-    ccs = float(os.environ.get("CPU_CACHE_GB", 0) or 0)
-    rcs = float(os.environ.get("RECURRENT_CACHE_GB", 4) or 0)
-
-    argv = ["serve", "-m", MODEL_DIR,
-            "-cs", str(os.environ.get("CACHE_SIZE", 262144)),
-            "-cq", str(os.environ.get("CACHE_QUANT", "4")),
-            "-ngr",                       # n-gram/PLE table in host RAM: mandatory here
-            "-mtp", "-ndt", str(ndt),
-            "-gcs", str(gcs),
-            "-mode", os.environ.get("CHAT_MODE", "chatml")]
-    if ccs:
-        argv += ["-ccs", str(ccs)]        # pinned-RAM second-tier KV page cache
-    if rcs:
-        argv += ["-rcs", str(rcs)]        # GDN checkpoint store (host RAM)
+    ROPE.update(apply_yarn(MODEL_DIR, YARN_FACTOR))
+    print("[api] rope: %s" % ROPE, flush=True)
+    if CONCURRENCY > 1:
+        print("[api] CONCURRENCY=%d asked for, but requests are serialised: serving 1 at a "
+              "time" % CONCURRENCY, flush=True)
+    argv, launch = engine_argv(os.environ, MODEL_DIR)
     sys.argv = argv
     ARGS = parser.parse_args()
-    LAUNCH.update({
-        "cache_size": int(os.environ.get("CACHE_SIZE", 262144)),
-        "cache_quant": os.environ.get("CACHE_QUANT", "4"),
-        "generator_chunk_size": gcs,
-        "num_draft_tokens": ndt,
-        "cpu_cache_gb": ccs,
-        "recurrent_cache_gb": rcs,
-        "mode": os.environ.get("CHAT_MODE", "chatml"),
-        "mtp": True,
-    })
+    gcs = launch["generator_chunk_size"]
+    ccs, rcs = launch["cpu_cache_gb"], launch["recurrent_cache_gb"]
+    LAUNCH.update(launch)
+    LAUNCH.update({"recipe": RECIPE, "model": MODEL_ID, "vision": VISION_WANTED,
+                   "yarn_factor": YARN_FACTOR if ROPE.get("yarn") else 0,
+                   "concurrency": 1, "concurrency_requested": CONCURRENCY})
 
     t0 = time.time()
     loaded = model_init.init(ARGS)
@@ -396,10 +581,14 @@ def _image_embedding(ref):
         raise MMUnavailable("image input needs Pillow in the runtime: %r" % exc)
     raw = payload if kind == "data" else _fetch_image(payload)
     img = Image.open(io.BytesIO(raw)).convert("RGB")
-    try:
-        ie = VISION.get_image_embeddings(tokenizer=TOK, image=img)
-    except TypeError:
-        ie = VISION.get_image_embeddings(TOK, img)
+    # The tower runs on the same GPU, with the same tokenizer, as generation: under
+    # the engine lock, not beside another request's decode (VRAM at these cache
+    # sizes has no room for the two at once)
+    with LOCK:
+        try:
+            ie = VISION.get_image_embeddings(tokenizer=TOK, image=img)
+        except TypeError:
+            ie = VISION.get_image_embeddings(TOK, img)
     alias = getattr(ie, "text_alias", None)
     if not alias:
         raise MMUnavailable("the vision model returned no prompt alias for this image")
@@ -447,16 +636,45 @@ def extract_images(req, embs):
                 item["content"] = flatten_parts(item["content"], embs)
 
 
-def render_chat(messages, template_kwargs=None):
+_TEMPLATE = {"src": None, "compiled": None}
+
+
+def _chat_template():
+    """The pack's template, compiled the way transformers compiles chat templates:
+    trimmed blocks, JSON without HTML escaping (tool schemas are full of < and >),
+    and the raise_exception the template calls."""
+    path = os.path.join(MODEL_DIR, "chat_template.jinja")
+    if JTemplate is None or not os.path.exists(path):
+        return None
+    src = open(path, encoding="utf-8").read()
+    if _TEMPLATE["src"] != src:
+        import jinja2
+        from jinja2.sandbox import ImmutableSandboxedEnvironment
+
+        def raise_exception(message):
+            raise jinja2.exceptions.TemplateError(message)
+
+        env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
+        env.filters["tojson"] = lambda x, indent=None, separators=None, sort_keys=False: \
+            json.dumps(x, ensure_ascii=False, indent=indent, separators=separators,
+                       sort_keys=sort_keys)
+        env.globals["raise_exception"] = raise_exception
+        env.globals["strftime_now"] = lambda fmt: time.strftime(fmt)
+        _TEMPLATE.update(src=src, compiled=env.from_string(src))
+    return _TEMPLATE["compiled"]
+
+
+def render_chat(messages, template_kwargs=None, tools=None):
     """Prefer the model's own chat template; fall back to ChatML."""
-    tpl_path = os.path.join(MODEL_DIR, "chat_template.jinja")
-    if JTemplate is not None and os.path.exists(tpl_path):
+    tpl = _chat_template()
+    if tpl is not None:
         try:
-            src = open(tpl_path, encoding="utf-8").read()
             kw = {"messages": messages, "add_generation_prompt": True}
             if template_kwargs:
                 kw.update(template_kwargs)
-            out = JTemplate(src).render(**kw)
+            if tools:
+                kw["tools"] = tools
+            out = tpl.render(**kw)
             if isinstance(out, str) and out.strip():
                 return out, "jinja"
         except Exception as exc:
@@ -470,6 +688,89 @@ def render_chat(messages, template_kwargs=None):
 
 
 LAST = {}
+
+# What the server has been asked to do, for the frontend's idle auto-stop: a client
+# talking to the tunnel directly (Codex, ModelDock) is activity too, and only this
+# process sees it. Generation requests only -- health and status polls are not use.
+ACTIVITY = {"requests": 0, "last_request_at": None, "in_flight": 0}
+ACTIVITY_LOCK = threading.Lock()
+LAST_TIMINGS = {}
+
+
+_MACHINE = {"at": 0.0, "data": None}
+
+
+def _num(text):
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None                                  # nvidia-smi says "[N/A]"
+
+
+def machine():
+    """What the box has left -- VRAM, RAM, disk -- for the frontend's rail.
+
+    Served here because this process is the one thing reachable through the
+    tunnel: `colab exec` can hang, and `colab download` cannot run nvidia-smi.
+    Cached for 20 s, since nvidia-smi is a subprocess and several clients may poll.
+    """
+    now = time.time()
+    if _MACHINE["data"] is not None and now - _MACHINE["at"] < 20:
+        return _MACHINE["data"]
+    d = {"at": int(now)}
+    try:
+        row = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu,"
+             "temperature.gpu,power.draw", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5).stdout.strip().splitlines()[0]
+        name, used, total, util, temp, power = [x.strip() for x in row.split(",")]
+        d["gpu"] = {"name": name, "used_mib": _num(used), "total_mib": _num(total),
+                    "util_pct": _num(util), "temp_c": _num(temp), "power_w": _num(power)}
+    except Exception:
+        d["gpu"] = None
+    try:
+        info = {}
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                k, _, v = line.partition(":")
+                info[k] = int(v.split()[0]) * 1024
+        d["ram"] = {"used_gib": round((info["MemTotal"] - info["MemAvailable"]) / 2 ** 30, 1),
+                    "total_gib": round(info["MemTotal"] / 2 ** 30, 1)}
+    except Exception:
+        d["ram"] = None
+    try:
+        du = shutil.disk_usage("/content" if os.path.isdir("/content") else "/")
+        d["disk"] = {"free_gib": round(du.free / 2 ** 30, 1), "total_gib": round(du.total / 2 ** 30, 1)}
+    except Exception:
+        d["disk"] = None
+    try:
+        with open("/proc/uptime") as fh:
+            d["uptime_s"] = int(float(fh.read().split()[0]))
+    except Exception:
+        d["uptime_s"] = None
+    _MACHINE.update(at=now, data=d)
+    return d
+
+
+def _timings(r, t_start, t_first, t_end):
+    """llama.cpp's `timings` block -- the WebUI already knows how to show it.
+
+    prompt_ms runs from the request to the first decoded fragment, so it includes
+    queueing behind the lock and prefill; predicted_ms runs from there to the end.
+    prompt_n excludes the cached prefix, as llama.cpp counts it.
+    """
+    cached = int(r.get("cached_tokens") or 0)
+    prompt_n = max(0, int(r.get("prompt_tokens") or 0) - cached)
+    new = int(r.get("new_tokens") or 0)
+    prompt_ms = max(0.0, (t_first - t_start) * 1000.0)
+    predicted_ms = max(0.0, (t_end - t_first) * 1000.0)
+    return {"cache_n": cached,
+            "prompt_n": prompt_n, "prompt_ms": round(prompt_ms, 1),
+            "prompt_per_second": (round(prompt_n / prompt_ms * 1000.0, 1)
+                                  if prompt_n and prompt_ms else None),
+            "predicted_n": new, "predicted_ms": round(predicted_ms, 1),
+            "predicted_per_second": (round(new / predicted_ms * 1000.0, 1)
+                                     if new and predicted_ms else None)}
 
 
 def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=None,
@@ -502,6 +803,16 @@ def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=No
             input_ids = TOK.encode(prompt, add_bos=True)
     n_prompt = int(input_ids.shape[-1]) if hasattr(input_ids, "shape") else len(input_ids)
     LAST["prompt_tokens"] = n_prompt
+    # exllamav3 reserves prompt + max_new_tokens + 1 + draft depth up front and
+    # refuses a job that cannot fit the whole cache, so a generous default allowance
+    # would make the top of the context unusable. Answer as much as fits instead.
+    room = answer_room(n_prompt)
+    if room is not None:
+        if room < 1:
+            raise ContextTooLong("the prompt is %d tokens; with this server's %d-token cache "
+                                 "that leaves no room for an answer"
+                                 % (n_prompt, getattr(GEN.cache, "max_num_tokens", 0)))
+        max_tokens = min(max_tokens, room)
     # Mirror Generator.generate()'s own Job construction field for field. A Job
     # built with fewer fields behaves differently: it stopped after a single
     # token here, which is what an empty answer looks like from the client side.
@@ -517,25 +828,49 @@ def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=No
               max_rq_tokens=None,
               stop_on_loop=None)
     serial = GEN.enqueue(job)
-    while GEN.num_remaining_jobs():
-        for r in GEN.iterate():
-            if r.get("stage") == "error":
-                # A contained per-job failure. Surface it rather than returning a
-                # silently truncated completion.
-                raise r["error"]
-            if r.get("stage") != "streaming" or r.get("serial") != serial:
-                continue
-            frag = r.get("text") or ""
-            if frag:
-                yield frag
-            if r.get("eos"):
-                LAST["new_tokens"] = r.get("new_tokens")
-                LAST["eos_reason"] = r.get("eos_reason")
-                LAST["prompt_tokens"] = r.get("prompt_tokens") or n_prompt
-                # Without this, usage and the log line report a 0% prompt-cache hit
-                # on every request -- which is exactly what a cold Generator looks
-                # like, the one misdiagnosis this server is built to rule out.
-                LAST["cached_tokens"] = r.get("cached_tokens") or 0
+    finished = False
+    try:
+        while GEN.num_remaining_jobs():
+            for r in GEN.iterate():
+                if r.get("stage") == "error":
+                    # A contained per-job failure. Surface it rather than returning a
+                    # silently truncated completion.
+                    finished = True
+                    raise r["error"]
+                if r.get("stage") != "streaming" or r.get("serial") != serial:
+                    continue
+                frag = r.get("text") or ""
+                if frag:
+                    yield frag
+                if r.get("eos"):
+                    finished = True
+                    LAST["new_tokens"] = r.get("new_tokens")
+                    LAST["eos_reason"] = r.get("eos_reason")
+                    LAST["prompt_tokens"] = r.get("prompt_tokens") or n_prompt
+                    # Without this, usage and the log line report a 0% prompt-cache hit
+                    # on every request -- which is exactly what a cold Generator looks
+                    # like, the one misdiagnosis this server is built to rule out.
+                    LAST["cached_tokens"] = r.get("cached_tokens") or 0
+    finally:
+        if not finished:
+            # The client went away mid-answer (or something upstream raised): cancel,
+            # or the next request's loop runs this orphan to its end first -- up to
+            # the whole allowance, minutes of decode nobody reads.
+            try:
+                GEN.cancel(job)
+            except Exception as exc:
+                print("[api] could not cancel an abandoned job: %r" % exc, flush=True)
+
+
+def answer_room(n_prompt):
+    """Tokens of answer the cache can take after this prompt, or None if unknown."""
+    total = getattr(getattr(GEN, "cache", None), "max_num_tokens", None)
+    if not total:
+        return None
+    ndt = int(LAUNCH.get("num_draft_tokens") or 0)
+    # the job's page reservation: prompt + max_new + 1 + draft depth, rounded up to a
+    # 256-token page -- keep one page of slack for the rounding
+    return int(total) - int(n_prompt) - 1 - ndt - 256
 
 
 def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None, stops=None,
@@ -586,13 +921,23 @@ def collect(prompt, max_tokens, temperature=None, top_p=None, stops=None,
     generate() did, so non-streaming callers are unchanged.
     """
     buf = []
+    t_start = time.time()
+    t_first = None
     try:
         with LOCK:
-            for frag in _engine_fragments(prompt, max_tokens, temperature, top_p, stops,
-                                          embeddings):
-                buf.append(frag)
-                if on_delta is not None:
-                    on_delta(clean_completion("".join(buf)))
+            frags = _engine_fragments(prompt, max_tokens, temperature, top_p, stops,
+                                      embeddings)
+            try:
+                for frag in frags:
+                    if t_first is None:
+                        t_first = time.time()
+                    buf.append(frag)
+                    if on_delta is not None:
+                        on_delta(clean_completion("".join(buf)))
+            finally:
+                # closed here, inside the lock: an abandoned job is cancelled by the
+                # thread that owns the engine, never by a garbage collector later
+                frags.close()
             # Snapshot while this request still owns the engine: the next request
             # clears LAST the moment it takes the lock.
             out = dict(LAST)
@@ -601,6 +946,12 @@ def collect(prompt, max_tokens, temperature=None, top_p=None, stops=None,
               % exc, flush=True)
         return _generate_blocking(prompt, max_tokens, temperature, top_p, stops,
                                   embeddings)
+    if t_first is not None:
+        # Only the incremental path has a first-token time; the blocking fallback
+        # gets no timings rather than invented ones.
+        out["timings"] = _timings(out, t_start, t_first, time.time())
+        LAST_TIMINGS.clear()
+        LAST_TIMINGS.update(out["timings"], at=int(time.time()))
     out["text"] = clean_completion("".join(buf))
     if not out["text"].strip():
         # Never answer empty. The incremental path can yield nothing if a build's
@@ -638,13 +989,19 @@ class _Delta:
     instead: an SSE stream cannot unsend.
     """
 
-    def __init__(self):
+    def __init__(self, thinking_on=False, tools_on=False):
+        self.thinking_on = thinking_on
+        self.tools_on = tools_on
         self.sent_reasoning = ""
         self.sent_content = ""
         self.content_started = False
 
-    def feed(self, accumulated):
-        reasoning, answer = split_thinking(accumulated)
+    def feed(self, accumulated, done=False):
+        reasoning, answer = split_thinking(accumulated, self.thinking_on)
+        if self.tools_on:
+            # a tool call is not text: stop at it, and hold back what might be one
+            # (until the answer is done: then a trailing '<' is text)
+            answer = before_tool_call(answer, done)
         out = []
         if (not self.content_started
                 and reasoning.startswith(self.sent_reasoning)
@@ -659,33 +1016,300 @@ class _Delta:
         return out
 
 
+# --- tools -------------------------------------------------------------------
+# This pack's template renders `tools` into the system turn and teaches the model
+# Qwen3-Coder's XML call format:
+#
+#     <tool_call>\n<function=NAME>\n<parameter=P>\nvalue\n</parameter>\n</function>\n</tool_call>
+#
+# Before this, `tools` never reached the template and nothing parsed that format,
+# so a model that did try to call a tool had its call handed to the client as text.
+
+TOOL_OPEN = "<tool_call>"
+_FUNC_OPEN = re.compile(r"\s*<function=([^>\n]+)>")
+# A value ends at the first </parameter> that is followed by the next parameter, the
+# end of the function, the end of the call or the end of the text -- so a value that
+# itself contains "</tool_call>" or "</function>" (a patch to this very parser, a chat
+# template) is read whole instead of cutting the call short.
+_PARAM = re.compile(r"\s*<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>"
+                    r"(?=\s*(?:<parameter=|</function>|</tool_call>|\Z))", re.S)
+_FUNC_CLOSE = re.compile(r"\s*</function>")
+_CALL_CLOSE = re.compile(r"\s*</tool_call>")
+_JSON_BODY = re.compile(r"\s*(\{.*?\})\s*(?:</tool_call>|\Z)", re.S)
+
+
+def _text_of(content):
+    if isinstance(content, list):
+        return "".join(p.get("text", "") for p in content if isinstance(p, dict))
+    if content is None:
+        return ""
+    return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+
+
+def _arguments_dict(args):
+    """The template iterates arguments with |items, so it needs a dict, while the
+    wire carries a JSON string."""
+    if isinstance(args, str):
+        try:
+            args = json.loads(args or "{}")
+        except ValueError:
+            return {"input": args}
+    return args if isinstance(args, dict) else {}
+
+
+def request_tools(req):
+    """(tools in the template's chat-completions shape, name -> (kind, schema)).
+
+    Chat sends {"type": "function", "function": {...}}; Responses sends flat
+    function tools and Codex's freeform `custom` tools (apply_patch), which become
+    one-string-parameter functions here and go back out as custom_tool_call items.
+    Vendor-hosted tools (web_search, ...) cannot run here and are left out.
+    """
+    if req.get("tool_choice") == "none":
+        return [], {}
+    tools, kinds = [], {}
+    for t in req.get("tools") or []:
+        if not isinstance(t, dict):
+            continue
+        if t.get("type") == "function":
+            fn = t["function"] if isinstance(t.get("function"), dict) else t
+            name = fn.get("name")
+            if not name:
+                continue
+            params = fn.get("parameters") or {"type": "object", "properties": {}}
+            tools.append({"type": "function", "function": {
+                "name": name, "description": fn.get("description") or "", "parameters": params}})
+            kinds[name] = ("function", params)
+        elif t.get("type") == "custom" and t.get("name"):
+            desc = t.get("description") or ""
+            fmt = t.get("format") if isinstance(t.get("format"), dict) else {}
+            if fmt.get("definition"):
+                desc += "\n\nThe input must follow this %s:\n%s" % (
+                    fmt.get("syntax") or "grammar", fmt["definition"])
+            params = {"type": "object", "required": ["input"],
+                      "properties": {"input": {"type": "string",
+                                               "description": "the tool's raw input"}}}
+            tools.append({"type": "function", "function": {
+                "name": t["name"], "description": desc, "parameters": params}})
+            kinds[t["name"]] = ("custom", params)
+    return tools, kinds
+
+
+def _schema_types(schema):
+    """The JSON types a (possibly composite) schema allows; empty = anything."""
+    if not isinstance(schema, dict):
+        return set()                       # `true`, `false`, or junk: no constraint
+    kinds = schema.get("type")
+    out = set(kinds) if isinstance(kinds, list) else ({kinds} if isinstance(kinds, str) else set())
+    for key in ("anyOf", "oneOf"):
+        for sub in schema.get(key) or []:
+            out |= _schema_types(sub)
+    return out - {"null"}
+
+
+def _typed(value, schema):
+    """A parameter's text as the JSON type its schema asks for -- or left as text
+    rather than invented, when it does not parse or a string is allowed."""
+    kinds = _schema_types(schema)
+    if "string" in kinds:
+        return value                       # "1.0" for anyOf[string, null] stays "1.0"
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        low = value.strip().lower()
+        return (low == "true") if "boolean" in kinds and low in ("true", "false") else value
+    if kinds == {"integer"} and isinstance(parsed, float) and parsed.is_integer():
+        parsed = int(parsed)
+    return parsed
+
+
+def extract_tool_calls(text, kinds, cut=False):
+    """(the answer before the first call, [{"name", "arguments"}]).
+
+    Qwen3-Coder XML is what this template teaches; the older JSON body
+    ({"name": ..., "arguments": {...}}) is taken too. A call that ends at
+    </function> without </tool_call> still counts -- the model often stops there.
+    One that never reached </function> is complete only if the generation was not
+    cut off (cut=True: it stopped on the token ceiling): a cut call is missing its
+    last argument, and sending it would run a tool on half its input. Only runs when
+    the request offered tools, so a chat about XML is left alone.
+    """
+    i = text.find(TOOL_OPEN) if kinds else -1
+    if i < 0:
+        return text, []
+    calls, pos = [], i
+    while True:
+        j = text.find(TOOL_OPEN, pos)
+        if j < 0:
+            break
+        pos = j + len(TOOL_OPEN)
+        m = _FUNC_OPEN.match(text, pos)
+        if m:
+            name = m.group(1).strip()
+            spec = (kinds.get(name) or (None, {}))[1]
+            props = (spec.get("properties") if isinstance(spec, dict) else None) or {}
+            args, pos = {}, m.end()
+            while True:
+                p = _PARAM.match(text, pos)
+                if not p:
+                    break
+                key = p.group(1).strip()
+                args[key] = _typed(p.group(2), props.get(key) if isinstance(props, dict) else None)
+                pos = p.end()
+            f = _FUNC_CLOSE.match(text, pos)
+            if f:
+                pos = f.end()
+            elif cut:
+                break                      # cut off inside this call: drop it
+            c = _CALL_CLOSE.match(text, pos)
+            if c:
+                pos = c.end()
+            calls.append({"name": name, "arguments": args})
+            continue
+        b = _JSON_BODY.match(text, pos)
+        if not b:
+            continue
+        try:
+            obj = json.loads(b.group(1))
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("name"):
+            calls.append({"name": obj["name"], "arguments": _arguments_dict(obj.get("arguments"))})
+        pos = b.end()
+    return text[:i].rstrip(), calls
+
+
+def before_tool_call(answer, done=False):
+    """What of a streaming answer may be sent now: everything before a tool call,
+    holding back a tail that could be the start of one ('<tool_c') -- until the
+    answer is done, when a trailing '<' is just text and goes out."""
+    i = answer.find(TOOL_OPEN)
+    if i >= 0:
+        return answer[:i].rstrip()
+    if done:
+        return answer
+    for k in range(len(TOOL_OPEN) - 1, 0, -1):
+        if answer.endswith(TOOL_OPEN[:k]):
+            return answer[:-k]
+    return answer
+
+
+def template_roles(msgs):
+    """Fold the leading system and developer turns into one system message.
+
+    This template accepts `system` only as the first message and raises on any role
+    it does not know -- and Codex sends `developer` turns. The raise made
+    render_chat fall back to bare ChatML for every Codex request: no thinking
+    control, no tools, and the model's markers leaking into the answer.
+
+    Only the leading run is folded. A system or developer turn later in the
+    conversation stays where it is, as a user turn: hoisting it to the top would
+    rewrite the start of the prompt and throw away the whole prefix cache -- minutes
+    of prefill at these context lengths.
+    """
+    head, rest = [], []
+    for m in msgs:
+        role = m.get("role")
+        if role in ("system", "developer") and not rest:
+            text = _text_of(m.get("content")).strip()
+            if text:
+                head.append(text)
+        elif role in ("user", "assistant", "tool"):
+            rest.append(m)
+        else:
+            rest.append(dict(m, role="user"))
+    return ([{"role": "system", "content": "\n\n".join(head)}] if head else []) + rest
+
+
+def chat_messages(msgs):
+    """Chat messages as this template takes them: tool-call arguments as dicts,
+    tool results as text, no null content, system/developer folded to the top."""
+    out = []
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        m = dict(m)
+        if m.get("role") == "assistant" and isinstance(m.get("tool_calls"), list):
+            m["tool_calls"] = [{"id": tc.get("id"), "type": "function", "function": {
+                "name": ((tc.get("function") or {}).get("name")) or "?",
+                "arguments": _arguments_dict((tc.get("function") or {}).get("arguments"))}}
+                for tc in m["tool_calls"] if isinstance(tc, dict)]
+        if m.get("content") is None:
+            m["content"] = ""
+        if m.get("role") == "tool":
+            m["content"] = _text_of(m.get("content"))
+        out.append(m)
+    return template_roles(out)
+
+
 def responses_messages(req):
-    """Map a Responses-API request onto chat messages."""
+    """Map a Responses-API request onto chat messages the template accepts.
+
+    function_call / custom_tool_call items become the assistant's tool_calls and
+    their outputs become `tool` messages -- before, both turned into empty user
+    turns, so the model never saw what its tools returned.
+    """
     src = req.get("input")
     if src is None:
         src = req.get("messages")
     msgs = []
+
+    def assistant_turn():
+        if msgs and msgs[-1]["role"] == "assistant":
+            return msgs[-1]
+        msgs.append({"role": "assistant", "content": ""})
+        return msgs[-1]
+
     if isinstance(src, str):
         msgs.append({"role": "user", "content": src})
     elif isinstance(src, list):
         for item in src:
             if isinstance(item, str):
                 msgs.append({"role": "user", "content": item})
-            elif isinstance(item, dict):
-                role = item.get("role") or "user"
+                continue
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("type")
+            if kind in ("function_call", "custom_tool_call"):
+                args = (item.get("arguments") if kind == "function_call"
+                        else {"input": item.get("input") or ""})
+                assistant_turn().setdefault("tool_calls", []).append({
+                    "id": item.get("call_id") or item.get("id"), "type": "function",
+                    "function": {"name": item.get("name") or "?",
+                                 "arguments": _arguments_dict(args)}})
+            elif kind in ("function_call_output", "custom_tool_call_output"):
+                msgs.append({"role": "tool", "tool_call_id": item.get("call_id"),
+                             "content": _text_of(item.get("output"))})
+            elif kind in (None, "message"):
                 c = item.get("content")
-                if isinstance(c, list):
-                    text = "".join(p.get("text", "") for p in c if isinstance(p, dict))
-                elif isinstance(c, str):
-                    text = c
-                else:
-                    text = item.get("text") or ""
-                msgs.append({"role": role, "content": text})
+                text = _text_of(c) if c is not None else (item.get("text") or "")
+                msgs.append({"role": item.get("role") or "user", "content": text})
+            # reasoning, and calls to vendor-hosted tools, are not replayed
     if isinstance(req.get("instructions"), str) and req["instructions"].strip():
         msgs.insert(0, {"role": "system", "content": req["instructions"]})
+    msgs = template_roles(msgs)
     if not msgs:
         msgs = [{"role": "user", "content": "hello"}]
     return msgs
+
+
+def wire_calls(calls, kinds):
+    """Parsed calls -> (chat tool_calls, Responses output items), sharing call ids."""
+    chat, items = [], []
+    for c in calls:
+        call_id = "call_" + secrets.token_hex(12)
+        args = json.dumps(c["arguments"], ensure_ascii=False)
+        chat.append({"id": call_id, "type": "function",
+                     "function": {"name": c["name"], "arguments": args}})
+        if (kinds.get(c["name"]) or ("function",))[0] == "custom":
+            items.append({"type": "custom_tool_call", "id": "ctc_" + secrets.token_hex(12),
+                          "call_id": call_id, "name": c["name"], "status": "completed",
+                          "input": str(c["arguments"].get("input", ""))})
+        else:
+            items.append({"type": "function_call", "id": "fc_" + secrets.token_hex(12),
+                          "call_id": call_id, "name": c["name"], "status": "completed",
+                          "arguments": args})
+    return chat, items
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -851,10 +1475,15 @@ class Handler(BaseHTTPRequestHandler):
             cache_tokens = getattr(getattr(GEN, "cache", None), "max_num_tokens", None)
             return self._send(200, {
                 "service": "collabosm",
-                "model": "qwen3.8-flash-next-exl3",
+                "model": MODEL_ID,
+                "recipe": RECIPE,
                 "started": SERVER_STARTED,
                 "uptime_s": int(time.time()) - SERVER_STARTED if SERVER_STARTED else None,
                 "cache_max_tokens": cache_tokens,
+                # the context a request can use: the native window, or YaRN's
+                "context": {"native": ROPE.get("native"), "yarn_factor": LAUNCH.get("yarn_factor", 0),
+                            "max_positions": ROPE.get("max") or ROPE.get("native")},
+                "concurrency": {"serving": 1, "requested": CONCURRENCY},
                 "dialects": ["/v1/chat/completions", "/v1/responses"],
                 "vision": {
                     "enabled": VISION_WANTED,
@@ -867,11 +1496,22 @@ class Handler(BaseHTTPRequestHandler):
                     "max_bytes": MAX_IMAGE_BYTES,
                     "max_images_per_request": MAX_IMAGES,
                 },
+                "generation": {
+                    "max_new_tokens_default": MAX_NEW_TOKENS,
+                    "thinking_default": THINKING_DEFAULT,
+                    # There is no thinking budget to report: the template's
+                    # reasoning_effort chooses how hard, max_output_tokens caps how
+                    # long, and the two share the one allowance.
+                    "thinking_budget": None,
+                },
                 "launch": LAUNCH,
+                "activity": dict(ACTIVITY),
+                "last_timings": dict(LAST_TIMINGS) or None,
+                "machine": machine(),
             })
         if self.path in ("/", "/v1"):
             return self._send(200, {"service": "collabosm",
-                                    "model": "qwen3.8-flash-next-exl3",
+                                    "model": MODEL_ID,
                                     "endpoints": ["/v1/models", "/v1/chat/completions",
                                                   "/v1/responses", "/health"]})
         return self._send(404, {"error": {"message": "not found: %s" % self.path}})
@@ -889,9 +1529,18 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(raw or b"{}")
         except Exception as exc:
             return self._send(400, {"error": {"message": "bad json: %r" % exc}})
-        if self.path.startswith("/v1/responses"):
-            return self._responses(req)
-        return self._completions(req)
+        with ACTIVITY_LOCK:
+            ACTIVITY["requests"] += 1
+            ACTIVITY["in_flight"] += 1
+            ACTIVITY["last_request_at"] = int(time.time())
+        try:
+            if self.path.startswith("/v1/responses"):
+                return self._responses(req)
+            return self._completions(req)
+        finally:
+            with ACTIVITY_LOCK:
+                ACTIVITY["in_flight"] -= 1
+                ACTIVITY["last_request_at"] = int(time.time())
 
     def _completions(self, req):
         msgs = req.get("messages") or []
@@ -907,16 +1556,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": {"message": "messages must be a non-empty array",
                                               "type": "invalid_request_error",
                                               "param": "messages"}})
-        prompt, how = render_chat(msgs, template_kwargs_from(req))
+        tkw = template_kwargs_from(req)
+        tools, kinds = request_tools(req)
+        prompt, how = render_chat(chat_messages(msgs), tkw, tools)
+        thinking_on = prompt_opens_think(prompt)
         # OpenAI renamed max_tokens -> max_completion_tokens; accept both.
         max_tokens = int(req.get("max_completion_tokens")
-                         or req.get("max_tokens") or 512)
+                         or req.get("max_tokens") or MAX_NEW_TOKENS)
         stream = bool(req.get("stream"))
         stop = req.get("stop")
         stops = [stop] if isinstance(stop, str) else list(stop or [])
 
         cid = "chatcmpl-%d" % int(time.time() * 1000)
-        model = req.get("model", "qwen3.8-flash-next-exl3")
+        model = req.get("model", MODEL_ID)
 
         def finish_reason(r):
             return "length" if (r.get("eos_reason") or "") == "max_new_tokens" else "stop"
@@ -926,8 +1578,11 @@ class Handler(BaseHTTPRequestHandler):
             ct_ = r.get("cached_tokens") or 0
             nt_ = r.get("new_tokens") or 0
             hit = (100.0 * ct_ / pt_) if pt_ else 0.0
-            print("[api] template=%s prompt=%d cached=%d (%.1f%% hit) new=%d finish=%s"
-                  % (how, pt_, ct_, hit, nt_, finish_reason(r)), flush=True)
+            tm = r.get("timings") or {}
+            print("[api] template=%s prompt=%d cached=%d (%.1f%% hit) new=%d finish=%s "
+                  "prefill=%s t/s decode=%s t/s"
+                  % (how, pt_, ct_, hit, nt_, finish_reason(r),
+                     tm.get("prompt_per_second"), tm.get("predicted_per_second")), flush=True)
 
         def usage_for(r):
             pt_ = r.get("prompt_tokens") or 0
@@ -946,22 +1601,38 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 r = collect(prompt, max_tokens, req.get("temperature"),
                             req.get("top_p"), stops, embeddings=embs)
+            except ContextTooLong as exc:
+                return self._send(400, {"error": {"message": str(exc),
+                                                  "type": "invalid_request_error",
+                                                  "code": "context_length_exceeded"}})
             except Exception as exc:
                 traceback.print_exc()
                 return self._send(500, {"error": {"message": repr(exc)}})
-            reasoning, text = split_thinking(r.get("text") or "")
+            reasoning, text = split_result(r, thinking_on)
+            text, calls = extract_tool_calls(text, kinds, cut=truncated(r))
             report(r)
-            return self._send(200, {
+            message = assistant_message(text, reasoning)
+            if calls:
+                message["tool_calls"] = wire_calls(calls, kinds)[0]
+                message["content"] = text or None
+            body = {
                 "id": cid, "object": "chat.completion", "created": int(time.time()),
                 "model": model,
-                "choices": [{"index": 0, "finish_reason": finish_reason(r),
-                             "message": assistant_message(text, reasoning)}],
-                "usage": usage_for(r)})
+                # cut off on the token ceiling is "length" even with calls in it:
+                # the client must not take a truncated turn for a finished one
+                "choices": [{"index": 0,
+                             "finish_reason": ("tool_calls" if calls and not truncated(r)
+                                               else finish_reason(r)),
+                             "message": message}],
+                "usage": usage_for(r)}
+            if r.get("timings"):
+                body["timings"] = r["timings"]
+            return self._send(200, body)
 
         # Genuinely incremental: text is forwarded while the engine decodes it,
         # rather than being chunked up after the completion is already finished.
         self._sse_start()
-        delta = _Delta()
+        delta = _Delta(thinking_on, bool(kinds))
         started = [False]
 
         def emit(deltas):
@@ -982,14 +1653,30 @@ class Handler(BaseHTTPRequestHandler):
                         stops, on_delta=lambda acc: emit(delta.feed(acc)),
                         embeddings=embs)
         except Exception as exc:
-            traceback.print_exc()
-            self._sse_write("data: " + json.dumps(
-                {"error": {"message": repr(exc)}}) + "\n\n")
+            if not isinstance(exc, ContextTooLong):
+                traceback.print_exc()
+            err = ({"message": str(exc), "type": "invalid_request_error",
+                    "code": "context_length_exceeded"} if isinstance(exc, ContextTooLong)
+                   else {"message": repr(exc)})
+            self._sse_write("data: " + json.dumps({"error": err}) + "\n\n")
             self._sse_write("data: [DONE]\n\n")
             return self._sse_end()
-        emit(delta.feed(r.get("text") or ""))
+        emit(delta.feed(r.get("text") or "", done=True))
         report(r)
-        self._sse_write("data: " + json.dumps(chunk({}, finish_reason(r))) + "\n\n")
+        calls = extract_tool_calls(split_result(r, thinking_on)[1], kinds, cut=truncated(r))[1]
+        if calls:
+            if not started[0]:
+                self._sse_write("data: " + json.dumps(
+                    chunk({"role": "assistant", "content": None})) + "\n\n")
+            for n, call in enumerate(wire_calls(calls, kinds)[0]):
+                self._sse_write("data: " + json.dumps(
+                    chunk({"tool_calls": [dict(call, index=n)]})) + "\n\n")
+        final = chunk({}, "tool_calls" if calls and not truncated(r) else finish_reason(r))
+        if r.get("timings"):
+            # llama.cpp's field on the last chunk: the WebUI shows it under the
+            # reply, and the frontend's rail reads it as it passes through.
+            final["timings"] = r["timings"]
+        self._sse_write("data: " + json.dumps(final) + "\n\n")
         so = req.get("stream_options")
         if isinstance(so, dict) and so.get("include_usage"):
             self._sse_write("data: " + json.dumps({
@@ -1020,32 +1707,41 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": {"message": str(exc),
                                               "type": "vision_unavailable"}})
         msgs = responses_messages(req)
-        prompt, how = render_chat(msgs, template_kwargs_from(req))
-        max_tokens = int(req.get("max_output_tokens") or req.get("max_tokens") or 512)
+        tkw = template_kwargs_from(req)
+        tools, kinds = request_tools(req)
+        prompt, how = render_chat(msgs, tkw, tools)
+        thinking_on = prompt_opens_think(prompt)
+        max_tokens = int(req.get("max_output_tokens") or req.get("max_tokens")
+                         or MAX_NEW_TOKENS)
         stream = bool(req.get("stream"))
         now = int(time.time())
-        model = req.get("model", "qwen3.8-flash-next-exl3")
+        model = req.get("model", MODEL_ID)
         base = now * 1000
         rid = "resp_%d" % base
         mid = "msg_%d" % (base + 1)
         rsn_id = "rs_%d" % (base + 2)
 
-        def payload_for(r, text, reasoning):
+        def payload_for(r, text, reasoning, calls=()):
             pt = r.get("prompt_tokens") or 0
             nt = r.get("new_tokens") or 0
+            cut = truncated(r)
             output = []
             if reasoning:
                 output.append({"id": rsn_id, "type": "reasoning", "status": "completed",
                                "summary": [{"type": "summary_text", "text": reasoning}]})
-            output.append({"id": mid, "type": "message", "role": "assistant",
-                           "status": "completed",
-                           "content": [{"type": "output_text", "text": text,
-                                        "annotations": []}]})
+            if text or not calls:
+                output.append({"id": mid, "type": "message", "role": "assistant",
+                               "status": "incomplete" if cut else "completed",
+                               "content": ([{"type": "output_text", "text": text,
+                                             "annotations": []}] if text else [])})
+            output.extend(calls)
             return {
                 "id": rid,
                 "object": "response",
                 "created_at": now,
-                "status": "completed",
+                # A response that stopped on the token ceiling is not completed, and
+                # saying so is the difference between "short answer" and "truncated".
+                "status": "incomplete" if cut else "completed",
                 "model": model,
                 "output": output,
                 "output_text": text,
@@ -1057,7 +1753,7 @@ class Handler(BaseHTTPRequestHandler):
                           "total_tokens": pt + nt,
                           "input_tokens_details": {"cached_tokens": r.get("cached_tokens") or 0},
                           "output_tokens_details": {"reasoning_tokens": 0}},
-                "incomplete_details": None,
+                "incomplete_details": ({"reason": "max_output_tokens"} if cut else None),
                 "error": None,
             }
 
@@ -1065,14 +1761,20 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 r = collect(prompt, max_tokens, req.get("temperature"), req.get("top_p"),
                             embeddings=embs)
+            except ContextTooLong as exc:
+                return self._send(400, {"error": {"message": str(exc),
+                                                  "type": "invalid_request_error",
+                                                  "code": "context_length_exceeded"}})
             except Exception as exc:
                 traceback.print_exc()
                 return self._send(500, {"error": {"message": repr(exc)}})
-            reasoning, text = split_thinking(r.get("text") or "")
-            print("[api] /v1/responses template=%s prompt=%s new=%s eos=%s text=%r"
+            reasoning, text = split_result(r, thinking_on)
+            text, calls = extract_tool_calls(text, kinds, cut=truncated(r))
+            items = wire_calls(calls, kinds)[1]
+            print("[api] /v1/responses template=%s prompt=%s new=%s eos=%s calls=%s text=%r"
                   % (how, r.get("prompt_tokens"), r.get("new_tokens"),
-                     r.get("eos_reason"), text[:60]), flush=True)
-            return self._send(200, payload_for(r, text, reasoning))
+                     r.get("eos_reason"), [c["name"] for c in calls], text[:60]), flush=True)
+            return self._send(200, payload_for(r, text, reasoning, items))
 
         seq = [0]
 
@@ -1089,7 +1791,7 @@ class Handler(BaseHTTPRequestHandler):
         ev("response.created", {"response": rmeta})
         ev("response.in_progress", {"response": rmeta})
 
-        delta = _Delta()
+        delta = _Delta(thinking_on, bool(kinds))
         state = {"open": None, "idx": 0}
 
         def reasoning_item(status, text):
@@ -1159,22 +1861,52 @@ class Handler(BaseHTTPRequestHandler):
             r = collect(prompt, max_tokens, req.get("temperature"), req.get("top_p"),
                         on_delta=lambda acc: emit(delta.feed(acc)), embeddings=embs)
         except Exception as exc:
-            traceback.print_exc()
+            too_long = isinstance(exc, ContextTooLong)
+            if not too_long:
+                traceback.print_exc()
             ev("response.failed", {"response": {
                 "id": rid, "object": "response", "created_at": now, "model": model,
                 "status": "failed",
-                "error": {"code": "server_error", "message": repr(exc)}}})
+                "error": {"code": "context_length_exceeded" if too_long else "server_error",
+                          "message": str(exc) if too_long else repr(exc)}}})
             return self._sse_end()
 
         final = r.get("text") or ""
-        reasoning, text = split_thinking(final)
-        emit(delta.feed(final))
+        reasoning, text = split_result(r, thinking_on)
+        text, calls = extract_tool_calls(text, kinds, cut=truncated(r))
+        items = wire_calls(calls, kinds)[1]
+        emit(delta.feed(final, done=True))
         close_reasoning()
-        open_message()
-        close_message(text)
-        print("[api] /v1/responses template=%s prompt=%s new=%s"
-              % (how, r.get("prompt_tokens"), r.get("new_tokens")), flush=True)
-        ev("response.completed", {"response": payload_for(r, text, reasoning)})
+        if text or not items or state["open"] == "message":
+            open_message()
+            close_message(text)
+            state["idx"] += 1
+        for item in items:
+            # Codex binds a call's argument deltas to an item it was told about, so
+            # every call gets the whole lifecycle, ids matching the terminal event.
+            pending = dict(item, status="in_progress")
+            if item["type"] == "custom_tool_call":
+                pending["input"] = ""
+                ev("response.output_item.added", {"output_index": state["idx"], "item": pending})
+                ev("response.custom_tool_call_input.delta",
+                   {"item_id": item["id"], "output_index": state["idx"], "delta": item["input"]})
+                ev("response.custom_tool_call_input.done",
+                   {"item_id": item["id"], "output_index": state["idx"], "input": item["input"]})
+            else:
+                pending["arguments"] = ""
+                ev("response.output_item.added", {"output_index": state["idx"], "item": pending})
+                ev("response.function_call_arguments.delta",
+                   {"item_id": item["id"], "output_index": state["idx"],
+                    "delta": item["arguments"]})
+                ev("response.function_call_arguments.done",
+                   {"item_id": item["id"], "output_index": state["idx"],
+                    "arguments": item["arguments"]})
+            ev("response.output_item.done", {"output_index": state["idx"], "item": item})
+            state["idx"] += 1
+        print("[api] /v1/responses template=%s prompt=%s new=%s calls=%s"
+              % (how, r.get("prompt_tokens"), r.get("new_tokens"),
+                 [c["name"] for c in calls]), flush=True)
+        ev("response.completed", {"response": payload_for(r, text, reasoning, items)})
         self._sse_end()
 
 
