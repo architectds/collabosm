@@ -63,6 +63,12 @@
   :focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
   button { font: inherit; color: inherit; }
 
+  /* ---- icons ---------------------------------------------------------- */
+  .ico {
+    width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+
   /* ---- header -------------------------------------------------------- */
   header {
     flex: none; height: 52px; display: flex; align-items: center; gap: 12px;
@@ -106,6 +112,7 @@
   .btn:disabled { opacity: .42; cursor: not-allowed; }
   /* a disabled primary ("Running") is a quiet chip, not a half-transparent slab */
   .btn.primary:disabled { opacity: 1; background: var(--soft); color: var(--muted); border-color: var(--line-strong); }
+  .btn .ico { width: 14px; height: 14px; }
   header .btn { width: auto; height: 32px; margin: 0; font-size: 12.5px; }
   .tag {
     display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border: 1px solid var(--line-strong);
@@ -114,6 +121,29 @@
   }
   .tag.solid { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-fg); }
   .mono { font-family: var(--mono); font-size: 11.5px; }
+
+  /* ---- chips: an icon and a value; the words are in the tooltip ------- */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 28px;
+    padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: transparent;
+    color: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default;
+  }
+  .chip .ico { color: var(--muted); }
+  .chip b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .chip.only { width: 28px; padding: 0; justify-content: center; }
+  .chip.off { border-style: dashed; color: var(--faint); }
+  .chip.off .ico { color: var(--faint); }
+  .chip.alert { border-color: var(--fg); }
+  .chip.alert .ico { color: var(--fg); }
+  button.chip { cursor: pointer; }
+  button.chip:hover { border-color: var(--fg); }
+  .chip.wide { flex: 1 1 100%; }
+  #tip {
+    position: fixed; z-index: 50; max-width: 272px; padding: 7px 10px; border-radius: 8px;
+    background: var(--inv-bg); color: var(--inv-fg); font-size: 12px; line-height: 1.45;
+    box-shadow: var(--shadow); pointer-events: none; overflow-wrap: anywhere;
+  }
 
   /* ---- layout -------------------------------------------------------- */
   main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--rail); }
@@ -127,20 +157,16 @@
   }
   section { padding: 18px 20px 20px; border-bottom: 1px solid var(--line); }
   section:last-child { border-bottom: 0; }
-  h2 {
-    margin: 0 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    font-size: 11px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; color: var(--muted);
-  }
-  :lang(zh) h2, :lang(ja) h2 { letter-spacing: .05em; }
   #toast {
     position: sticky; top: 0; z-index: 3; margin: 0; padding: 11px 20px;
     background: var(--inv-bg); color: var(--inv-fg); font-size: 12.5px;
   }
 
-  /* ---- session ------------------------------------------------------- */
-  .state { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  /* ---- status: session, note, machine, compute units ------------------ */
+  .state { display: flex; align-items: center; gap: 10px; }
   .state b { font-size: 24px; font-weight: 650; letter-spacing: -.025em; line-height: 1.2; }
-  .state .pct { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .state .pct { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .who { margin-top: 2px; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
   .steps {
     list-style: none; margin: 16px 0 14px; padding: 0; position: relative;
     display: grid; grid-template-columns: repeat(5, 1fr);
@@ -162,50 +188,101 @@
   .note { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
   .note:empty { display: none; }
   .fine { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
-  .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; margin: 16px 0 0; font-size: 12.5px; }
-  .kv dt { color: var(--muted); }
-  .kv dd {
-    margin: 0; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; font-variant-numeric: tabular-nums;
+  .blk { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .sub {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--muted);
+    font-size: 11px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase;
   }
-
-  .confirm { margin-top: 16px; padding: 16px; border: 1.5px solid var(--fg); border-radius: 14px; background: var(--raise); }
-  .confirm h3 { margin: 0; font-size: 14.5px; font-weight: 650; line-height: 1.4; }
-  .confirm .who { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; margin-top: 4px; font-size: 12.5px; }
-  .confirm .who span { color: var(--muted); }
-  .confirm .usd { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
-  .confirm ul { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
-  .confirm li + li { margin-top: 4px; }
+  :lang(zh) .sub, :lang(ja) .sub { letter-spacing: .05em; }
+  .sub .tag { margin-left: auto; }
+  .res { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+  .res + .res { margin-top: 10px; }
+  .res .ico { color: var(--muted); }
+  .res .bar { height: 6px; box-shadow: inset 0 0 0 1px var(--line); }
+  .res b { min-width: 96px; text-align: right; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .figure { display: inline-flex; align-items: baseline; gap: 8px; }
+  .figure b { font-size: 30px; font-weight: 650; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .figure span { color: var(--muted); font-size: 12px; }
+  .figure.none b { color: var(--faint); font-size: 22px; font-weight: 500; }
   .actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 16px; }
   .actions .btn { margin: 0; }
 
-  .figs, .specs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
-  .figs div, .specs div { padding: 8px 10px; border-radius: 9px; background: var(--soft); min-width: 0; }
-  .figs b, .specs b { display: block; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
-  .figs small, .specs small { display: block; margin-top: 1px; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
+  .confirm { margin-top: 16px; padding: 16px; border: 1.5px solid var(--fg); border-radius: 14px; background: var(--raise); }
+  .confirm h3 { margin: 0; font-size: 14.5px; font-weight: 650; line-height: 1.4; }
+  .confirm .who { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; margin-top: 4px; }
+  .confirm .who b { color: var(--fg); }
+  .confirm .usd { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+  .confirm ul { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+  .confirm li + li { margin-top: 4px; }
+  .confirm li.warn { color: var(--fg); }
+  .figs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+  .figs div { padding: 8px 10px; border-radius: 9px; background: var(--soft); min-width: 0; }
+  .figs b { display: block; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .figs small { display: block; margin-top: 1px; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
 
-  /* ---- recipes ------------------------------------------------------- */
-  .recipe { padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; }
-  .recipe + .recipe { margin-top: 10px; }
-  .recipe.sel { border-color: var(--fg); }
-  .recipe .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .recipe .top b { font-size: 14px; font-weight: 650; }
-  .tags { display: inline-flex; gap: 6px; }
-  .recipe .sub { margin-top: 2px; color: var(--muted); font-size: 12px; }
+  /* ---- folds: optional sections, collapsed to one line ---------------- */
+  section.fold { padding: 0; }
+  .fold h2 { margin: 0; font: inherit; }
+  .fold-head {
+    width: 100%; display: flex; align-items: center; gap: 10px; padding: 15px 20px; border: 0;
+    background: transparent; color: var(--muted); cursor: pointer; text-align: left;
+    font-size: 11px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase;
+  }
+  :lang(zh) .fold-head, :lang(ja) .fold-head { letter-spacing: .05em; }
+  .fold-head:hover, .fold-head[aria-expanded="true"] { color: var(--fg); }
+  .fold-head > span:not(.fold-sum) { flex: none; white-space: nowrap; }
+  .fold-sum {
+    margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--faint); font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none;
+  }
+  .fold-head .chev { transition: transform .2s ease; }
+  .fold-head[aria-expanded="true"] .chev { transform: rotate(180deg); }
+  .fold-body { padding: 0 20px 20px; }
 
-  /* ---- money, speed -------------------------------------------------- */
-  .figure { display: flex; align-items: baseline; gap: 8px; }
-  .figure b { font-size: 30px; font-weight: 650; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.1; }
-  .figure span { color: var(--muted); font-size: 12px; }
-  .meter { height: 8px; margin-top: 12px; border-radius: 999px; background: var(--soft); overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
-  .meter i { display: block; height: 100%; width: 0; background: var(--fg); transition: width .5s ease; }
+  /* ---- GPUs ------------------------------------------------------------ */
+  .gpu { padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; }
+  .gpu + .gpu { margin-top: 10px; }
+  .gpu.sel { border-color: var(--fg); }
+  .gpu .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .gpu .top b { font-size: 14px; font-weight: 650; }
+  .gpu .chips { margin-top: 10px; gap: 5px; }
+  .gpu .chip { padding: 0 8px; gap: 5px; }
+  .pick { position: relative; display: block; margin-top: 12px; }
+  .pick select {
+    appearance: none; -webkit-appearance: none; width: 100%; height: 34px; padding: 0 32px 0 34px;
+    border: 1px solid var(--line-strong); border-radius: 9px; background: var(--raise); color: var(--fg);
+    font: inherit; font-size: 12.5px; cursor: pointer; text-overflow: ellipsis;
+  }
+  .pick select:hover { border-color: var(--fg); }
+  .pick select:disabled { cursor: default; opacity: .7; }
+  .pick select option { background: var(--raise); color: var(--fg); }
+  .pick .ico { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); }
+  .pick .ico.l { left: 11px; }
+  .pick .ico.r { right: 11px; }
+  .facts {
+    list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr;
+    gap: 7px 14px; font-size: 12px;
+  }
+  .facts li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .facts li span { color: var(--muted); white-space: nowrap; }
+  .facts li b { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .facts .ico { width: 13px; height: 13px; }
+  .facts .est { color: var(--faint); }
+  .facts li.est b { color: var(--muted); font-weight: 500; }
+
+  /* ---- speed ----------------------------------------------------------- */
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .stat { padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 12px; }
   .stat small { display: block; color: var(--muted); font-size: 11px; letter-spacing: .04em; }
   .stat b { display: inline-block; margin-top: 4px; font-size: 22px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .stat span { margin-left: 4px; color: var(--muted); font-size: 12px; }
 
-  /* ---- connection, log ----------------------------------------------- */
+  /* ---- connection, log --------------------------------------------------- */
+  .list { list-style: none; margin: 12px 0 0; padding: 0; font-size: 12px; }
+  .list li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 0; border-top: 1px solid var(--line); }
+  .list li:first-child { border-top: 0; }
+  .list li .ico { color: var(--muted); }
+  .list li .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   details { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
   details + details { margin-top: 12px; }
   summary {
@@ -256,14 +333,14 @@
   <iframe id="ui" src="/?embed=1" title="collabosm chat" allow="clipboard-write; clipboard-read"></iframe>
   <aside id="rail">
     <p id="toast" role="status" aria-live="polite" hidden></p>
-    <section id="s-session"></section>
-    <section id="s-recipes"></section>
-    <section id="s-money"></section>
-    <section id="s-speed"></section>
-    <section id="s-conn"></section>
-    <section id="s-log"></section>
+    <section id="s-status"></section>
+    <section class="fold" id="f-gpus"></section>
+    <section class="fold" id="f-speed"></section>
+    <section class="fold" id="f-conn"></section>
+    <section class="fold" id="f-log"></section>
   </aside>
 </main>
+<div id="tip" role="tooltip" hidden></div>
 <script>
 'use strict';
 // The upstream WebUI registers a service worker at scope "/" (workbox, sw.js).
@@ -276,59 +353,114 @@ if ('serviceWorker' in navigator) {
 }
 
 // Every word the rail shows. control.py sends codes and numbers only: a note is
-// {k, a}, and an answer carries `code`.
+// {k, a}, and an answer carries `code`. The rail itself mostly shows icons and
+// values; the words live in the tooltips (data-tip), in all three languages.
 const I18N = {
   en: {
     'hdr.loading': 'Reading the control plane…',
     'hdr.unreachable': 'Control plane unreachable',
     'badge.rehearsal': 'Rehearsal · nothing billed',
-    'btn.stop': 'Stop',
-    'toggle.hide': 'Hide panel (Ctrl/⌘ B)',
-    'toggle.show': 'Show panel (Ctrl/⌘ B)',
-    'lang.label': 'Language',
-    'sec.session': 'Session', 'sec.recipes': 'Card & recipe', 'sec.money': 'Money',
-    'sec.speed': 'Speed', 'sec.conn': 'Connection', 'sec.log': 'Log',
+    'btn.stop': 'Stop', 'btn.detach': 'Detach',
+    'toggle.hide': 'Hide panel (Ctrl/⌘ B)', 'toggle.show': 'Show panel (Ctrl/⌘ B)',
+    'lang.label': 'Language', 'copied': 'Endpoint copied.',
+    'tip.stop.ready': 'Stop the VM and end billing (runs down.sh).',
+    'tip.stop.job': 'Cancel the job and stop the VM it may have started.',
+    'tip.stop.failed': 'Run the stop again (down.sh), for a VM the failure may have left billing.',
+    'tip.stop.stale': 'Close the session the ledger never closed (runs down.sh first).',
+    'tip.stop.vm': 'Stop the VM that is billing on our session.',
+    'tip.stop.attached': 'Detach from the external endpoint. Nothing is stopped: we did not start it.',
     'stage.idle': 'No card', 'stage.requesting': 'Requesting', 'stage.uploading': 'Uploading',
     'stage.bootstrapping': 'Installing', 'stage.loading': 'Loading', 'stage.ready': 'Ready',
     'stage.stopping': 'Stopping', 'stage.stopped': 'Stopped', 'stage.failed': 'Failed',
     'stage.attached': 'External endpoint',
     'step.requesting': 'Request', 'step.uploading': 'Upload', 'step.bootstrapping': 'Install',
     'step.loading': 'Load', 'step.ready': 'Ready',
-    'row.model': 'Model', 'row.endpoint': 'Endpoint', 'row.key': 'API key',
-    'key.held': 'held by the proxy', 'key.pending': 'reading…', 'key.none': 'not read',
-    'row.idle': 'Idle stop in', 'row.uptime': 'Running for',
-    'btn.stopbill': 'Stop — end billing', 'btn.detach': 'Detach',
-    'btn.stopagain': 'Run stop again (down.sh)', 'btn.stopstale': 'Stop and close the ledger',
+    'tag.adopted': 'Adopted',
+    'tip.adopted': 'Taken over from outside this frontend: billed from the VM’s own uptime, and stoppable here.',
+    'tip.endpoint': 'Endpoint {url} — click to copy',
+    'tip.link': 'Tunnel: /health through the tunnel, every 20 s',
+    'link.ok': '{ms} ms', 'link.down': '×{n}', 'link.unknown': '…',
+    'tip.idle': 'Idle stop: the VM stops itself {idle} min after the last chat request, and after {max} h in any case',
+    'tip.idle.off': 'No idle stop: this server keeps no request log. The {max} h ceiling still applies.',
+    'tip.uptime': 'Billed time of this session',
+    'tip.hold.on': 'Colab keep-alive sent {ago} ago. Held while in use; an idle box is left to the idle stop.',
+    'tip.hold.idle': 'Not held: no chat inside the idle window, so Colab may reclaim the box.',
+    'tip.hold.err': 'Keep-alive failed: {err}',
+    'tip.hold.gone': 'Colab lists no assignment for this session.',
+    'tip.hold.pending': 'The first keep-alive is on its way.',
+    'tip.key.held': 'API key: held by the proxy, never sent to the browser',
+    'tip.key.pending': 'API key: reading it from the VM…',
+    'tip.key.none': 'API key: not read — chat will be refused',
     'attached.body': 'We did not start it, so it is never billed or auto-stopped. Restart the frontend without --external-endpoint to request your own card.',
+    'btn.couple': 'Reconnect', 'btn.adopt': 'Take over the running VM',
+    'btn.go': 'Start — billing begins', 'btn.cancel': 'Cancel',
+    'sec.machine': 'Machine', 'machine.server': 'server', 'machine.local': 'this PC',
+    'tip.msrc.server': 'Reported by the model server through the tunnel · probed {ago} ago',
+    'tip.msrc.local': 'This PC (the endpoint runs here) · probed {ago} ago',
+    'tip.vram': 'GPU memory: used / total', 'tip.ram': 'Host RAM: used / total', 'tip.disk': 'Disk: free / total',
+    'res.used': '{used} / {total} GB', 'res.free': '{free} / {total} GB free',
+    'tip.util': 'GPU utilisation · {name}', 'tip.temp': 'GPU temperature', 'tip.power': 'GPU power draw',
+    'tip.vision.on': 'Vision on: image input is accepted',
+    'tip.vision.off': 'Vision off: image input is refused',
+    'tip.vision.err': 'Vision failed to load: {err}',
+    'tip.launch': 'Launched with cache {cache} · Q{cq} · gcs {gcs} · ccs {ccs} GB · rcs {rcs} GB · ndt {ndt}',
+    'machine.up': 'service up {up}',
+    'tip.ctx.yarn': 'Context: YaRN ×{f} over the native {native} positions',
+    'tip.ctx.native': 'Context: the model’s native positions',
+    'machine.none': 'The server does not report its machine yet — that needs the newer api_server.',
+    'sec.money': 'Compute units', 'money.src': 'Colab',
+    'tip.balance': 'Compute units left on the account, read from Colab {ago} ago',
+    'money.unknown': 'Balance unavailable (a rehearsal, or Colab did not answer).',
+    'tip.burn': 'Burn rate of the whole account ({n} assignment(s) billing)',
+    'tip.burn.none': 'Nothing is billing on the account',
+    'tip.left': 'Time left at this rate',
+    'tip.session': 'This session so far: {h} h',
+    'tip.billing': 'Assignments billing on the account (colab sessions)',
+    'billing.unknown': 'Not probed yet',
+    'billing.stale': 'the last probe did not answer; this is the one before',
     'confirm.head': 'Billing starts the moment you press Start',
     'confirm.cuph': 'CU per hour', 'confirm.eta': 'min to ready', 'confirm.need': 'CU to load',
     'confirm.usd': '≈ ${usd} per hour',
     'confirm.load': 'The load alone costs about {need} CU. Switching recipes is another load.',
     'confirm.stops': 'Stops by itself after {idle} min idle, and after {max} h in any case.',
     'confirm.budget': 'Budget {budget} CU this month: {left} left now, about {after} after this start.',
-    'btn.go': 'Start — billing begins', 'btn.cancel': 'Cancel',
-    'recipe.pick': 'Select and start', 'recipe.running': 'Running',
-    'tag.current': 'Current', 'tag.unverified': 'Unverified',
-    'spec.cuph': 'CU / h', 'spec.vram': 'GB VRAM', 'spec.eta': 'min to ready',
-    'money.used': 'CU used this month', 'money.left': '{left} of {budget} CU left',
-    'row.session': 'This session', 'row.idlestop': 'Idle auto-stop', 'row.ceiling': 'Session ceiling',
-    'unit.min': '{n} min', 'unit.h': '{n} h',
-    'speed.ref': 'Reference', 'speed.live': 'Live',
-    'speed.where': 'Measured by this repo on {date} on an {card}, not in this session.',
-    'speed.gcs': 'Prefill reaches {n} t/s at gcs 8192.',
-    'row.cli': 'Colab CLI', 'row.wsl': 'WSL distro', 'row.billing': 'Billing instances',
-    'billing.unknown': 'not probed',
+    'confirm.balance': 'Balance {left} CU now; about {after} after this start.',
+    'confirm.unmeasured': 'This recipe has not been run on its card yet: its time, cost and speed are estimates.',
+    'confirm.rate': 'This card’s CU rate is Colab’s published figure, not one read from the account.',
+    'sec.gpus': 'GPUs', 'gpus.sum': '{n} cards · {r} recipes', 'gpus.running': 'running: {card}',
+    'tip.rate': 'CU per hour — {how}', 'tip.gvram': 'GPU memory', 'tip.gram': 'Host RAM',
+    'how.measured': 'measured', 'how.estimate': 'an estimate',
+    'model.label': 'Model',
+    'status.verified': 'verified', 'status.unmeasured': 'not yet run', 'status.placeholder': 'not runnable',
+    'fact.prefill_tps': 'Prefill', 'fact.decode_tps': 'Decode', 'fact.context': 'Context',
+    'fact.vision': 'Vision', 'fact.concurrency': 'Parallel', 'fact.vram_mib': 'VRAM',
+    'fact.weights': 'Weights', 'fact.load_s': 'Load', 'fact.eta_min': 'Ready in',
+    'fact.measured': 'Measured: {src}', 'fact.estimate': 'Not measured: {src}',
+    'tag.current': 'Current', 'recipe.pick': 'Start', 'recipe.running': 'Running', 'recipe.na': 'Not runnable',
+    'vision.on': 'on', 'vision.off': 'off',
+    'sec.speed': 'Speed', 'speed.live': 'live', 'speed.ref': 'reference',
+    'tip.prefill': 'Prefill: prompt tokens processed per second',
+    'tip.decode': 'Decode: tokens generated per second',
+    'tip.ttft': 'Time to the first token', 'tip.hit': 'Share of the prompt served from the cache',
+    'speed.src.server': 'Last reply, timed by the server · {ago} ago.',
+    'speed.src.proxy': 'Last reply; only its first token is timed (this server does not report speed) · {ago} ago.',
+    'speed.where': 'Measured for {recipe}, not in this session.',
+    'speed.none': 'No speed measured for {recipe} yet.',
+    'sec.conn': 'Connection', 'conn.sum': 'CLI {cli} · {n} billing',
+    'tip.cli': 'Colab CLI inside WSL', 'tip.wsl': 'WSL distro',
     'cli.ok': 'found', 'cli.missing': 'missing', 'cli.unknown': 'checking…', 'cli.rehearsal': 'rehearsal',
-    'det.command': 'Command it runs', 'det.command.none': 'Generated when you first pick a recipe.',
+    'session.ours': 'ours',
+    'det.command': 'Command it runs', 'det.command.none': 'Generated when you first start a recipe.',
     'det.billing': 'Raw billing output', 'det.billing.none': 'Not probed yet.',
-    'log.empty': 'Nothing yet.',
-    'note.idle.pick': 'No recipe yet. Picking one starts billing, so the numbers come first.',
+    'sec.log': 'Log', 'log.empty': 'Nothing yet.',
+    'ago.s': '{n} s', 'ago.m': '{n} min', 'dur.h': '{h} h {m} min', 'dur.m': '{m} min',
+    'note.idle.pick': 'No card yet. Starting one bills from the first second, so the numbers come first.',
     'note.attached': 'External endpoint attached: never billed, never auto-stopped.',
-    'note.stage.requesting': 'Requesting a Colab instance and checking its shape. A 40 GB draw is returned automatically (~0.13 CU).',
+    'note.stage.requesting': 'Requesting a Colab card and checking it. A card below the recipe’s VRAM is returned at once (~0.13 CU).',
     'note.stage.uploading': 'Uploading api_server, bootstrap and serve to /content.',
-    'note.stage.bootstrapping': 'Installing the ExLlamaV3 runtime and pulling ~100 GiB of weights from Hugging Face.',
-    'note.stage.loading': 'Writing ~63.6 GiB into VRAM and building the KV page table and n-gram table.',
-    'note.box': 'Instance verified: {box}',
+    'note.stage.bootstrapping': 'Installing the ExLlamaV3 runtime and pulling the weights from Hugging Face.',
+    'note.stage.loading': 'Loading the model into VRAM and building its cache.',
+    'note.box': 'Card verified: {box}',
     'note.waiting': 'Waiting for the endpoint; switches over as soon as it is healthy.',
     'note.vm': 'VM: {vm}',
     'note.vram': 'VRAM {used} / {total} MiB',
@@ -343,95 +475,164 @@ const I18N = {
     'note.fail.read': 'Reading the job log failed: {err}.',
     'note.fail.noready': 'up.sh exited cleanly but never reported READY. See the log.',
     'note.fail.exit': 'up.sh exited with {rc}: {why}',
+    'note.coupling': 'Looking for the service on the VM…',
+    'note.coupled': 'Took over the service running on session {session}. Its billing is tracked here, from the VM’s own uptime.',
+    'note.vm.live': 'A VM is billing on session {session}, but its service does not answer (VM stage: {stage}).',
+    'note.vm.gone': 'The VM is gone — Colab reclaimed it, or it was stopped elsewhere. Billing closed at about {cu} CU.',
+    'note.link.down': 'The tunnel stopped answering; asking the VM where the service is now…',
+    'note.link.moved': 'The tunnel moved to a new address; reconnected.',
     'autostop.running': ' Stopping the box so a failed run does not keep billing…',
     'autostop.done': ' The box was stopped automatically (down.sh).',
-    'vm.probing': 'checking the instance', 'vm.runtime': 'installing the ExLlamaV3 runtime',
+    'vm.probing': 'checking the card', 'vm.runtime': 'installing the ExLlamaV3 runtime',
     'vm.weights': 'pulling weights from Hugging Face', 'vm.env': 'writing the launch environment',
     'vm.bootstrapped': 'bootstrap done, starting the model server',
     'vm.loading': 'loading the model into VRAM', 'vm.ready': 'model server healthy',
     'vm.serve_failed': 'the model server failed to start',
     'vm.serve_timeout': 'the model server never became healthy',
     'vm.ready_no_tunnel': 'healthy, but the tunnel has no URL',
-    'exit.1': 'upload or bootstrap failed. See the log below.',
-    'exit.2': 'bad arguments.',
+    'exit.1': 'upload or bootstrap failed. See the log.',
+    'exit.2': 'the recipe or its arguments are wrong. See the log.',
     'exit.3': 'the server-side instance limit is reached. Stop another session first.',
-    'exit.4': 'assign was refused. The account may not be eligible for an A100.',
+    'exit.4': 'assign was refused. The account may not be eligible for this card.',
     'exit.5': 'cannot read assignments. The CLI may need to log in again.',
-    'exit.6': 'drew a 40 GB standard card, which was returned and stopped (~0.13 CU). Press again to redraw.',
+    'exit.6': 'drew a card below the recipe’s VRAM; it was returned and stopped (~0.13 CU). Press Start again to redraw.',
     'exit.7': 'timed out waiting for the endpoint (50 min by default).',
     'exit.8': 'the model server did not come up. See /content/serve.log.',
     'exit.9': 'healthy on the VM, but the tunnel published no URL. See /content/tunnel.log.',
     'exit.other': 'see the log.',
     'reason.manual': 'manual', 'reason.idle': 'idle', 'reason.max_hours': 'session ceiling',
     'reason.job_timeout': 'job timeout', 'reason.failed': 'failed', 'reason.stale': 'unclosed session',
-    'foot.control': 'Control plane: WSL → colab CLI → restore.py → up.sh',
+    'reason.vm_gone': 'VM gone',
+    'foot.control': 'Control plane: WSL → colab CLI → recipe.py → up.sh',
     'foot.external': 'External endpoint {base}; no instance was requested from this machine.',
     'foot.billing': 'Billing started: {card} · {cuph} CU/h',
     'foot.stopped': 'Stopped ({reason}). The control plane is up; the VM is not.',
     'foot.failed': 'Failed. This attempt cost about {cu} CU.',
+    'foot.adopted': 'Adopted: {card} on session {session} · billed and stoppable here',
     'code.unknown_recipe': 'No such recipe.',
     'code.attached': 'Attached to an external endpoint ({base}). Restart the frontend without --external-endpoint to request your own card.',
     'code.busy': 'Busy: {stage}.',
     'code.already': 'This recipe is already running.',
-    'code.stop_first': 'An instance is already running. Stop it before switching recipes; a switch is a full reload.',
+    'code.stop_first': 'A card is already running. Stop it before switching recipes; a switch is a full reload.',
     'code.stale_ledger': 'An earlier session was never closed. Press Stop first so it is stopped and accounted for.',
-    'code.budget': 'Only {left} CU left this month, below this start’s estimate of {need} CU.',
+    'code.budget': 'Only {left} CU left, below this start’s estimate of {need} CU.',
     'code.nothing_to_stop': 'Nothing is billing right now.',
     'code.already_stopping': 'Already stopping.',
     'code.detached': 'Detached from the external endpoint.',
     'code.error': 'Request failed: {err}',
+    'code.coupled': 'Coupled.', 'code.not_live': 'No VM is live on this session.',
+    'code.not_ready': 'The VM is live, but its service is not up yet.',
+    'code.unreachable': 'The service is up on the VM, but does not answer from here.',
+    'code.cooling': 'That VM was just stopped; waiting a moment before taking it over again.',
+    'code.probe_failed': 'Could not ask Colab which sessions are live (colab sessions did not answer).',
+    'code.placeholder': 'This recipe cannot run yet.',
+    'code.superseded': 'A stop or a new start happened while this was looking; nothing was taken over.',
   },
   zh: {
     'hdr.loading': '正在读取控制面…',
     'hdr.unreachable': '控制面不可达',
     'badge.rehearsal': '演练 · 不计费',
-    'btn.stop': '停机',
-    'toggle.hide': '收起面板（Ctrl/⌘ B）',
-    'toggle.show': '展开面板（Ctrl/⌘ B）',
-    'lang.label': '语言',
-    'sec.session': '本会话', 'sec.recipes': '卡与配方', 'sec.money': '费用',
-    'sec.speed': '速度', 'sec.conn': '连接', 'sec.log': '日志',
+    'btn.stop': '停机', 'btn.detach': '断开',
+    'toggle.hide': '收起面板（Ctrl/⌘ B）', 'toggle.show': '展开面板（Ctrl/⌘ B）',
+    'lang.label': '语言', 'copied': '端点已复制。',
+    'tip.stop.ready': '停掉 VM、结束计费（运行 down.sh）。',
+    'tip.stop.job': '取消任务，并停掉它可能已经起的 VM。',
+    'tip.stop.failed': '再停一次（down.sh），防止失败留下一台还在计费的 VM。',
+    'tip.stop.stale': '关掉账本里没关的会话（先运行 down.sh）。',
+    'tip.stop.vm': '停掉我们会话上正在计费的 VM。',
+    'tip.stop.attached': '断开外部端点。不会停任何东西：它不是我们启动的。',
     'stage.idle': '无卡无模型', 'stage.requesting': '申请中', 'stage.uploading': '上传工具包',
     'stage.bootstrapping': '安装与下载', 'stage.loading': '写入显存', 'stage.ready': '已就绪',
     'stage.stopping': '正在停机', 'stage.stopped': '已停机', 'stage.failed': '失败',
     'stage.attached': '外部端点',
     'step.requesting': '申请', 'step.uploading': '上传', 'step.bootstrapping': '安装',
     'step.loading': '载入', 'step.ready': '就绪',
-    'row.model': '模型', 'row.endpoint': '端点', 'row.key': '密钥',
-    'key.held': '代理持有', 'key.pending': '读取中…', 'key.none': '未读到',
-    'row.idle': '空闲停机倒计时', 'row.uptime': '已运行',
-    'btn.stopbill': '停机（停止计费）', 'btn.detach': '断开',
-    'btn.stopagain': '再停一次（down.sh）', 'btn.stopstale': '停机并关账',
+    'tag.adopted': '已接管',
+    'tip.adopted': '接管自本前端之外：从 VM 实际启动的时间起计费，也可以在这里停机。',
+    'tip.endpoint': '端点 {url} —— 点击复制',
+    'tip.link': '隧道：每 20 秒经隧道请求一次 /health',
+    'link.ok': '{ms} ms', 'link.down': '×{n}', 'link.unknown': '…',
+    'tip.idle': '空闲停机：最后一次对话请求后 {idle} 分钟自动停机；无论如何最长 {max} 小时',
+    'tip.idle.off': '不做空闲停机：这个服务端不记录请求。{max} 小时的上限仍然有效。',
+    'tip.uptime': '本会话已计费时长',
+    'tip.hold.on': '{ago}前已向 Colab 保活。使用中才保活；空闲的机器交给空闲停机。',
+    'tip.hold.idle': '未保活：空闲窗口内没有对话，Colab 可能回收这台机器。',
+    'tip.hold.err': '保活失败：{err}',
+    'tip.hold.gone': 'Colab 上已经没有这个会话的分配。',
+    'tip.hold.pending': '第一次保活马上发出。',
+    'tip.key.held': 'API 密钥：由代理持有，从不发给浏览器',
+    'tip.key.pending': 'API 密钥：正在从 VM 读取…',
+    'tip.key.none': 'API 密钥：没读到——对话会被拒绝',
     'attached.body': '这个端点不是我们启动的，所以既不计费，也不会被自动停机。要申请自己的卡，就不带 --external-endpoint 重启前端。',
+    'btn.couple': '重新连接', 'btn.adopt': '接管正在计费的 VM',
+    'btn.go': '开始（现在开始计费）', 'btn.cancel': '取消',
+    'sec.machine': '机器', 'machine.server': '服务端', 'machine.local': '本机',
+    'tip.msrc.server': '模型服务端经隧道上报 · {ago}前探测',
+    'tip.msrc.local': '本机（端点就在这台电脑上）· {ago}前探测',
+    'tip.vram': '显存：已用 / 总量', 'tip.ram': '内存：已用 / 总量', 'tip.disk': '磁盘：剩余 / 总量',
+    'res.used': '{used} / {total} GB', 'res.free': '剩 {free} / {total} GB',
+    'tip.util': 'GPU 利用率 · {name}', 'tip.temp': 'GPU 温度', 'tip.power': 'GPU 功耗',
+    'tip.vision.on': '视觉已开：接受图片输入',
+    'tip.vision.off': '视觉已关：拒绝图片输入',
+    'tip.vision.err': '视觉模块载入失败：{err}',
+    'tip.launch': '启动参数：cache {cache} · Q{cq} · gcs {gcs} · ccs {ccs} GB · rcs {rcs} GB · ndt {ndt}',
+    'machine.up': '服务已运行 {up}',
+    'tip.ctx.yarn': '上下文：在原生 {native} 位置上 YaRN ×{f}',
+    'tip.ctx.native': '上下文：模型原生的位置数',
+    'machine.none': '服务端还没上报机器状态——需要新版 api_server。',
+    'sec.money': '计算单元', 'money.src': 'Colab',
+    'tip.balance': '账户剩余计算单元，{ago}前从 Colab 读取',
+    'money.unknown': '读不到余额（演练模式，或 Colab 没有响应）。',
+    'tip.burn': '整个账户的消耗速度（{n} 个分配在计费）',
+    'tip.burn.none': '账户上现在没有在计费',
+    'tip.left': '按此速度还能用多久',
+    'tip.session': '本会话到目前：{h} 小时',
+    'tip.billing': '账户上在计费的分配（colab sessions）',
+    'billing.unknown': '还没探测',
+    'billing.stale': '最近一次探测没有响应；这是上一次的结果',
     'confirm.head': '点“开始”的那一刻就开始计费',
     'confirm.cuph': 'CU / 小时', 'confirm.eta': '分钟就绪', 'confirm.need': 'CU 载入成本',
     'confirm.usd': '≈ 每小时 ${usd}',
     'confirm.load': '光是载入就要约 {need} CU；换一次配方就是再载入一次。',
     'confirm.stops': '空闲 {idle} 分钟自动停机，连续最长 {max} 小时。',
     'confirm.budget': '本月预算 {budget} CU，现在剩 {left}；启动后预计剩 {after}。',
-    'btn.go': '开始（现在开始计费）', 'btn.cancel': '取消',
-    'recipe.pick': '选它并启动', 'recipe.running': '运行中',
-    'tag.current': '当前', 'tag.unverified': '未实测',
-    'spec.cuph': 'CU / 小时', 'spec.vram': 'GB 显存', 'spec.eta': '分钟就绪',
-    'money.used': '本月已用 CU', 'money.left': '剩 {left} / {budget} CU',
-    'row.session': '本次会话', 'row.idlestop': '空闲自动停机', 'row.ceiling': '连续上限',
-    'unit.min': '{n} 分钟', 'unit.h': '{n} 小时',
-    'speed.ref': '参考', 'speed.live': '实测',
-    'speed.where': '本仓库 {date} 在 {card} 上的实测，不是本次会话的数字。',
-    'speed.gcs': 'gcs 8192 时 prefill 可达 {n} t/s。',
-    'row.cli': 'Colab CLI', 'row.wsl': 'WSL 发行版', 'row.billing': '在计费实例',
-    'billing.unknown': '未探测',
+    'confirm.balance': '现在余额 {left} CU；启动后预计剩 {after}。',
+    'confirm.unmeasured': '这个配方还没在它的卡上跑过：时间、花费和速度都是估算。',
+    'confirm.rate': '这张卡的 CU 费率是 Colab 公布的数字，不是从账户读出来的。',
+    'sec.gpus': '可用 GPU', 'gpus.sum': '{n} 张卡 · {r} 个配方', 'gpus.running': '运行中：{card}',
+    'tip.rate': '每小时 CU —— {how}', 'tip.gvram': '显存', 'tip.gram': '内存',
+    'how.measured': '实测', 'how.estimate': '估算',
+    'model.label': '模型',
+    'status.verified': '已实测', 'status.unmeasured': '还没跑过', 'status.placeholder': '不可运行',
+    'fact.prefill_tps': 'Prefill', 'fact.decode_tps': 'Decode', 'fact.context': '上下文',
+    'fact.vision': '视觉', 'fact.concurrency': '并发', 'fact.vram_mib': '显存',
+    'fact.weights': '权重', 'fact.load_s': '载入', 'fact.eta_min': '就绪用时',
+    'fact.measured': '实测：{src}', 'fact.estimate': '未实测：{src}',
+    'tag.current': '当前', 'recipe.pick': '启动', 'recipe.running': '运行中', 'recipe.na': '不可运行',
+    'vision.on': '开', 'vision.off': '关',
+    'sec.speed': '速度', 'speed.live': '实测', 'speed.ref': '参考',
+    'tip.prefill': 'Prefill：每秒处理的提示词 token',
+    'tip.decode': 'Decode：每秒生成的 token',
+    'tip.ttft': '首个 token 的时间', 'tip.hit': '提示词中来自缓存的比例',
+    'speed.src.server': '最近一次回复，服务端计时 · {ago}前。',
+    'speed.src.proxy': '最近一次回复；只计了首字时间（这个服务端不上报速度）· {ago}前。',
+    'speed.where': '{recipe} 的实测值，不是本次会话的数字。',
+    'speed.none': '{recipe} 还没有实测速度。',
+    'sec.conn': '连接', 'conn.sum': 'CLI {cli} · {n} 个计费',
+    'tip.cli': 'WSL 里的 Colab CLI', 'tip.wsl': 'WSL 发行版',
     'cli.ok': '已找到', 'cli.missing': '未找到', 'cli.unknown': '检查中…', 'cli.rehearsal': '演练',
-    'det.command': '要跑的命令', 'det.command.none': '第一次选配方时生成。',
+    'session.ours': '我们的',
+    'det.command': '要跑的命令', 'det.command.none': '第一次启动配方时生成。',
     'det.billing': '服务端账目原文', 'det.billing.none': '还没探测。',
-    'log.empty': '暂无。',
-    'note.idle.pick': '还没选配方。选一个就开始计费，所以先把数字给你看。',
+    'sec.log': '日志', 'log.empty': '暂无。',
+    'ago.s': '{n} 秒', 'ago.m': '{n} 分钟', 'dur.h': '{h} 小时 {m} 分', 'dur.m': '{m} 分钟',
+    'note.idle.pick': '还没有卡。启动就从第一秒开始计费，所以先把数字给你看。',
     'note.attached': '外部端点已接上：不计费，也不会被自动停机。',
-    'note.stage.requesting': '向 Colab 申请实例并校验形状；抽到 40 GB 会自动退回（约 0.13 CU）。',
+    'note.stage.requesting': '向 Colab 申请卡并校验；显存低于配方要求的卡会立刻退回（约 0.13 CU）。',
     'note.stage.uploading': '上传 api_server / bootstrap / serve 到 /content。',
-    'note.stage.bootstrapping': '安装 ExLlamaV3 运行时，并从 Hugging Face 拉约 100 GiB 权重。',
-    'note.stage.loading': '把约 63.6 GiB 写进显存，建 KV 页表与 n-gram 表。',
-    'note.box': '实例校验：{box}',
+    'note.stage.bootstrapping': '安装 ExLlamaV3 运行时，并从 Hugging Face 拉取权重。',
+    'note.stage.loading': '把模型写进显存并建好缓存。',
+    'note.box': '卡已校验：{box}',
     'note.waiting': '正在等待端点，一健康就切换。',
     'note.vm': 'VM：{vm}',
     'note.vram': '显存 {used} / {total} MiB',
@@ -446,94 +647,163 @@ const I18N = {
     'note.fail.read': '读日志失败：{err}。',
     'note.fail.noready': 'up.sh 正常退出，但没等到 READY（看日志）。',
     'note.fail.exit': 'up.sh 退出码 {rc}：{why}',
+    'note.coupling': '正在寻找 VM 上的服务…',
+    'note.coupled': '已接管会话 {session} 上正在运行的服务；从 VM 实际启动的时间起在这里记账。',
+    'note.vm.live': '会话 {session} 上有一台 VM 在计费，但服务没有响应（VM 阶段：{stage}）。',
+    'note.vm.gone': 'VM 已经不在了——被 Colab 回收，或在别处停掉了。已关账，约 {cu} CU。',
+    'note.link.down': '隧道没有响应，正在问 VM 服务现在在哪…',
+    'note.link.moved': '隧道换了新地址，已重新连上。',
     'autostop.running': '正在停机，免得失败的实例继续计费…',
     'autostop.done': '已自动停机（down.sh）。',
-    'vm.probing': '校验实例', 'vm.runtime': '安装 ExLlamaV3 运行时',
+    'vm.probing': '校验卡', 'vm.runtime': '安装 ExLlamaV3 运行时',
     'vm.weights': '从 Hugging Face 拉权重', 'vm.env': '写入启动环境',
     'vm.bootstrapped': '引导完成，正在起模型服务',
     'vm.loading': '载入模型到显存', 'vm.ready': '模型服务已健康',
     'vm.serve_failed': '模型服务启动失败', 'vm.serve_timeout': '模型服务迟迟不健康',
     'vm.ready_no_tunnel': '服务健康，但隧道没有地址',
-    'exit.1': '上传或引导失败，看下面的日志。',
-    'exit.2': '参数错误。',
+    'exit.1': '上传或引导失败，看日志。',
+    'exit.2': '配方或参数有误，看日志。',
     'exit.3': '服务端实例数已到上限，先停掉别的会话。',
-    'exit.4': 'assign 请求被拒（账号可能没有 A100 资格）。',
+    'exit.4': 'assign 请求被拒（账号可能没有这张卡的资格）。',
     'exit.5': '读不到 assignments，CLI 可能需要重新登录。',
-    'exit.6': '抽到 40 GB 标准卡，已自动退回并停机（约 0.13 CU）；再点一次重抽。',
+    'exit.6': '抽到的卡显存低于配方要求，已退回并停机（约 0.13 CU）；再点一次“启动”重抽。',
     'exit.7': '等待端点超时（默认 50 分钟）。',
     'exit.8': '模型服务没起来，看 /content/serve.log。',
     'exit.9': 'VM 上服务健康，但隧道没给出地址，看 /content/tunnel.log。',
     'exit.other': '看日志。',
     'reason.manual': '手动', 'reason.idle': '空闲', 'reason.max_hours': '达到连续上限',
     'reason.job_timeout': '任务超时', 'reason.failed': '失败', 'reason.stale': '未关的会话',
-    'foot.control': '控制面：WSL → colab CLI → restore.py → up.sh',
+    'reason.vm_gone': 'VM 已不在',
+    'foot.control': '控制面：WSL → colab CLI → recipe.py → up.sh',
     'foot.external': '外部端点 {base}；本机没有申请实例。',
     'foot.billing': '计费已开始：{card} · {cuph} CU/h',
     'foot.stopped': '已停机（{reason}）。控制面在，VM 不在。',
     'foot.failed': '失败，这次约花了 {cu} CU。',
+    'foot.adopted': '已接管：会话 {session} 上的 {card} · 在这里计费、可停机',
     'code.unknown_recipe': '没有这个配方。',
     'code.attached': '现在接的是外部端点 {base}。要申请自己的卡，就不带 --external-endpoint 重启前端。',
     'code.busy': '正在忙：{stage}。',
     'code.already': '这个配方已经在运行。',
-    'code.stop_first': '已经有一个实例在跑。先停机再换配方（换配方就是一次重新载入）。',
+    'code.stop_first': '已经有一张卡在跑。先停机再换配方（换配方就是一次重新载入）。',
     'code.stale_ledger': '有一个之前的会话没关。先点“停机”，把它停掉并记账。',
-    'code.budget': '本月 CU 只剩 {left}，低于这次启动的估算 {need} CU。',
+    'code.budget': 'CU 只剩 {left}，低于这次启动的估算 {need} CU。',
     'code.nothing_to_stop': '现在没有在计费的实例。',
     'code.already_stopping': '已经在停机。',
     'code.detached': '已断开外部端点。',
     'code.error': '请求失败：{err}',
+    'code.coupled': '已连上。', 'code.not_live': '这个会话上没有在跑的 VM。',
+    'code.not_ready': 'VM 在跑，但服务还没起来。',
+    'code.unreachable': 'VM 上的服务起来了，但从这里连不上。',
+    'code.cooling': '这台 VM 刚被停掉，稍等再接管。',
+    'code.probe_failed': '问不到 Colab 哪些会话在跑（colab sessions 没有响应）。',
+    'code.placeholder': '这个配方还不能运行。',
+    'code.superseded': '查找期间已经停机或重新启动，没有接管任何东西。',
   },
   ja: {
     'hdr.loading': 'コントロールプレーンを読み込み中…',
     'hdr.unreachable': 'コントロールプレーンに接続できません',
     'badge.rehearsal': 'リハーサル・課金なし',
-    'btn.stop': '停止',
-    'toggle.hide': 'パネルを閉じる（Ctrl/⌘ B）',
-    'toggle.show': 'パネルを開く（Ctrl/⌘ B）',
-    'lang.label': '言語',
-    'sec.session': 'セッション', 'sec.recipes': 'カードとレシピ', 'sec.money': '費用',
-    'sec.speed': '速度', 'sec.conn': '接続', 'sec.log': 'ログ',
+    'btn.stop': '停止', 'btn.detach': '切断',
+    'toggle.hide': 'パネルを閉じる（Ctrl/⌘ B）', 'toggle.show': 'パネルを開く（Ctrl/⌘ B）',
+    'lang.label': '言語', 'copied': 'エンドポイントをコピーしました。',
+    'tip.stop.ready': 'VM を停止して課金を終えます（down.sh を実行）。',
+    'tip.stop.job': 'ジョブを取り消し、起動済みかもしれない VM を停止します。',
+    'tip.stop.failed': 'もう一度停止します（down.sh）。失敗で課金中の VM が残らないように。',
+    'tip.stop.stale': '記帳で閉じられていないセッションを閉じます（先に down.sh を実行）。',
+    'tip.stop.vm': '自分のセッションで課金中の VM を停止します。',
+    'tip.stop.attached': '外部エンドポイントから切断します。私たちが起動したものではないので、何も停止しません。',
     'stage.idle': 'カードなし', 'stage.requesting': '申請中', 'stage.uploading': 'アップロード中',
     'stage.bootstrapping': 'インストール中', 'stage.loading': 'ロード中', 'stage.ready': '準備完了',
     'stage.stopping': '停止中', 'stage.stopped': '停止済み', 'stage.failed': '失敗',
     'stage.attached': '外部エンドポイント',
     'step.requesting': '申請', 'step.uploading': '転送', 'step.bootstrapping': '導入',
     'step.loading': '読込', 'step.ready': '完了',
-    'row.model': 'モデル', 'row.endpoint': 'エンドポイント', 'row.key': 'API キー',
-    'key.held': 'プロキシが保持', 'key.pending': '取得中…', 'key.none': '未取得',
-    'row.idle': 'アイドル停止まで', 'row.uptime': '稼働時間',
-    'btn.stopbill': '停止（課金を終了）', 'btn.detach': '切断',
-    'btn.stopagain': 'もう一度停止（down.sh）', 'btn.stopstale': '停止して記帳を閉じる',
+    'tag.adopted': '引き継ぎ',
+    'tip.adopted': 'このフロントエンドの外から引き継ぎました。VM の実際の起動時刻から課金を記帳し、ここで停止できます。',
+    'tip.endpoint': 'エンドポイント {url} —— クリックでコピー',
+    'tip.link': 'トンネル：20 秒ごとにトンネル経由で /health を確認',
+    'link.ok': '{ms} ms', 'link.down': '×{n}', 'link.unknown': '…',
+    'tip.idle': 'アイドル停止：最後のチャット要求から {idle} 分で自動停止。どのみち最長 {max} 時間',
+    'tip.idle.off': 'アイドル停止なし：このサーバーはリクエストを記録しません。{max} 時間の上限は有効です。',
+    'tip.uptime': 'このセッションの課金時間',
+    'tip.hold.on': '{ago}前に Colab へキープアライブ送信。使用中だけ保持し、アイドルならアイドル停止に任せます。',
+    'tip.hold.idle': '保持していません：アイドル時間内にチャットがないため、Colab が回収する可能性があります。',
+    'tip.hold.err': 'キープアライブ失敗：{err}',
+    'tip.hold.gone': 'Colab にこのセッションの割り当てがありません。',
+    'tip.hold.pending': '最初のキープアライブをまもなく送信します。',
+    'tip.key.held': 'API キー：プロキシが保持し、ブラウザーには送りません',
+    'tip.key.pending': 'API キー：VM から読み込み中…',
+    'tip.key.none': 'API キー：未取得——チャットは拒否されます',
     'attached.body': 'このエンドポイントは私たちが起動したものではないため、課金も自動停止もしません。自分のカードを使うには --external-endpoint を付けずにフロントエンドを再起動してください。',
+    'btn.couple': '再接続', 'btn.adopt': '課金中の VM を引き継ぐ',
+    'btn.go': '開始（課金開始）', 'btn.cancel': 'キャンセル',
+    'sec.machine': 'マシン', 'machine.server': 'サーバー', 'machine.local': 'このPC',
+    'tip.msrc.server': 'モデルサーバーがトンネル経由で報告 · {ago}前に確認',
+    'tip.msrc.local': 'このPC（エンドポイントはここで動作）· {ago}前に確認',
+    'tip.vram': 'VRAM：使用 / 合計', 'tip.ram': 'メモリ：使用 / 合計', 'tip.disk': 'ディスク：空き / 合計',
+    'res.used': '{used} / {total} GB', 'res.free': '空き {free} / {total} GB',
+    'tip.util': 'GPU 使用率 · {name}', 'tip.temp': 'GPU 温度', 'tip.power': 'GPU 消費電力',
+    'tip.vision.on': 'ビジョン有効：画像入力を受け付けます',
+    'tip.vision.off': 'ビジョン無効：画像入力は拒否されます',
+    'tip.vision.err': 'ビジョンの読み込みに失敗：{err}',
+    'tip.launch': '起動パラメータ：cache {cache} · Q{cq} · gcs {gcs} · ccs {ccs} GB · rcs {rcs} GB · ndt {ndt}',
+    'machine.up': 'サービス稼働 {up}',
+    'tip.ctx.yarn': 'コンテキスト：ネイティブ {native} 位置に YaRN ×{f}',
+    'tip.ctx.native': 'コンテキスト：モデル本来の位置数',
+    'machine.none': 'サーバーはまだマシン状態を報告していません（新しい api_server が必要です）。',
+    'sec.money': 'コンピューティング単位', 'money.src': 'Colab',
+    'tip.balance': 'アカウントに残るコンピューティング単位（{ago}前に Colab から取得）',
+    'money.unknown': '残高を取得できません（リハーサル中、または Colab が応答しません）。',
+    'tip.burn': 'アカウント全体の消費ペース（課金中の割り当て {n} 件）',
+    'tip.burn.none': 'アカウントで課金中のものはありません',
+    'tip.left': 'このペースで使える残り時間',
+    'tip.session': 'このセッションの累計：{h} 時間',
+    'tip.billing': 'アカウントで課金中の割り当て（colab sessions）',
+    'billing.unknown': 'まだ確認していません',
+    'billing.stale': '最後の確認が応答しませんでした。これはその前の結果です',
     'confirm.head': '「開始」を押した瞬間から課金が始まります',
     'confirm.cuph': 'CU / 時間', 'confirm.eta': '分で準備完了', 'confirm.need': 'CU（ロード費用）',
     'confirm.usd': '≈ 1 時間あたり ${usd}',
     'confirm.load': 'ロードだけで約 {need} CU かかります。レシピを切り替えるたびに再ロードです。',
     'confirm.stops': '{idle} 分間アイドルで自動停止、連続最長 {max} 時間。',
     'confirm.budget': '今月の予算 {budget} CU、残り {left}。起動後は約 {after} の見込み。',
-    'btn.go': '開始（課金開始）', 'btn.cancel': 'キャンセル',
-    'recipe.pick': '選んで起動', 'recipe.running': '稼働中',
-    'tag.current': '選択中', 'tag.unverified': '未検証',
-    'spec.cuph': 'CU / 時', 'spec.vram': 'GB VRAM', 'spec.eta': '分で準備完了',
-    'money.used': '今月の使用 CU', 'money.left': '残り {left} / {budget} CU',
-    'row.session': '今回のセッション', 'row.idlestop': 'アイドル自動停止', 'row.ceiling': '連続上限',
-    'unit.min': '{n} 分', 'unit.h': '{n} 時間',
-    'speed.ref': '参考値', 'speed.live': '実測',
-    'speed.where': '本リポジトリが {date} に {card} で実測した値です。このセッションの数値ではありません。',
-    'speed.gcs': 'gcs 8192 では prefill が {n} t/s に達します。',
-    'row.cli': 'Colab CLI', 'row.wsl': 'WSL ディストリ', 'row.billing': '課金中のインスタンス',
-    'billing.unknown': '未確認',
+    'confirm.balance': '現在の残高 {left} CU。起動後は約 {after} の見込み。',
+    'confirm.unmeasured': 'このレシピはまだ対象カードで実行されていません。時間・費用・速度は見積もりです。',
+    'confirm.rate': 'このカードの CU レートは Colab の公表値で、アカウントから読んだ値ではありません。',
+    'sec.gpus': '利用可能な GPU', 'gpus.sum': '{n} 枚 · レシピ {r} 件', 'gpus.running': '稼働中：{card}',
+    'tip.rate': '1 時間あたりの CU —— {how}', 'tip.gvram': 'VRAM', 'tip.gram': 'メモリ',
+    'how.measured': '実測', 'how.estimate': '見積もり',
+    'model.label': 'モデル',
+    'status.verified': '実測済み', 'status.unmeasured': '未実行', 'status.placeholder': '実行不可',
+    'fact.prefill_tps': 'Prefill', 'fact.decode_tps': 'Decode', 'fact.context': 'コンテキスト',
+    'fact.vision': 'ビジョン', 'fact.concurrency': '並列', 'fact.vram_mib': 'VRAM',
+    'fact.weights': '重み', 'fact.load_s': 'ロード', 'fact.eta_min': '準備完了まで',
+    'fact.measured': '実測：{src}', 'fact.estimate': '未実測：{src}',
+    'tag.current': '選択中', 'recipe.pick': '起動', 'recipe.running': '稼働中', 'recipe.na': '実行不可',
+    'vision.on': 'オン', 'vision.off': 'オフ',
+    'sec.speed': '速度', 'speed.live': '実測', 'speed.ref': '参考値',
+    'tip.prefill': 'Prefill：1 秒あたりに処理するプロンプトトークン',
+    'tip.decode': 'Decode：1 秒あたりに生成するトークン',
+    'tip.ttft': '最初のトークンまでの時間', 'tip.hit': 'プロンプトのうちキャッシュから提供した割合',
+    'speed.src.server': '直近の返信（サーバー計測）· {ago}前。',
+    'speed.src.proxy': '直近の返信。初回トークンのみ計測（このサーバーは速度を報告しません）· {ago}前。',
+    'speed.where': '{recipe} の実測値で、このセッションの数値ではありません。',
+    'speed.none': '{recipe} の速度はまだ実測していません。',
+    'sec.conn': '接続', 'conn.sum': 'CLI {cli} · 課金中 {n}',
+    'tip.cli': 'WSL 内の Colab CLI', 'tip.wsl': 'WSL ディストリ',
     'cli.ok': 'あり', 'cli.missing': 'なし', 'cli.unknown': '確認中…', 'cli.rehearsal': 'リハーサル',
-    'det.command': '実行するコマンド', 'det.command.none': '最初にレシピを選ぶと生成されます。',
+    'session.ours': '自分の',
+    'det.command': '実行するコマンド', 'det.command.none': '最初にレシピを起動すると生成されます。',
     'det.billing': 'サーバー側の課金出力', 'det.billing.none': 'まだ確認していません。',
-    'log.empty': 'まだありません。',
-    'note.idle.pick': 'レシピ未選択。選ぶと課金が始まるので、先に数字をお見せします。',
+    'sec.log': 'ログ', 'log.empty': 'まだありません。',
+    'ago.s': '{n} 秒', 'ago.m': '{n} 分', 'dur.h': '{h} 時間 {m} 分', 'dur.m': '{m} 分',
+    'note.idle.pick': 'カードはまだありません。起動した瞬間から課金されるので、先に数字をお見せします。',
     'note.attached': '外部エンドポイントに接続済み：課金なし、自動停止なし。',
-    'note.stage.requesting': 'Colab インスタンスを申請し、形状を確認しています。40 GB が当たった場合は自動で返却します（約 0.13 CU）。',
+    'note.stage.requesting': 'Colab のカードを申請して確認中。レシピの VRAM に満たないカードはすぐに返却します（約 0.13 CU）。',
     'note.stage.uploading': 'api_server / bootstrap / serve を /content にアップロード中。',
-    'note.stage.bootstrapping': 'ExLlamaV3 ランタイムを導入し、Hugging Face から約 100 GiB の重みを取得中。',
-    'note.stage.loading': '約 63.6 GiB を VRAM に書き込み、KV ページ表と n-gram 表を構築中。',
-    'note.box': 'インスタンス確認：{box}',
+    'note.stage.bootstrapping': 'ExLlamaV3 ランタイムを導入し、Hugging Face から重みを取得中。',
+    'note.stage.loading': 'モデルを VRAM に読み込み、キャッシュを構築中。',
+    'note.box': 'カード確認：{box}',
     'note.waiting': 'エンドポイントを待機中。正常になり次第切り替えます。',
     'note.vm': 'VM：{vm}',
     'note.vram': 'VRAM {used} / {total} MiB',
@@ -548,53 +818,118 @@ const I18N = {
     'note.fail.read': 'ジョブログの読み取りに失敗：{err}。',
     'note.fail.noready': 'up.sh は正常終了しましたが、READY になりませんでした（ログ参照）。',
     'note.fail.exit': 'up.sh 終了コード {rc}：{why}',
+    'note.coupling': 'VM 上のサービスを探しています…',
+    'note.coupled': 'セッション {session} で稼働中のサービスを引き継ぎました。課金は VM の実際の起動時刻から、ここで記帳します。',
+    'note.vm.live': 'セッション {session} の VM が課金中ですが、サービスが応答しません（VM ステージ：{stage}）。',
+    'note.vm.gone': 'VM がなくなりました。Colab に回収されたか、別の場所で停止されました。記帳を閉じました（約 {cu} CU）。',
+    'note.link.down': 'トンネルが応答しません。サービスの現在地を VM に問い合わせています…',
+    'note.link.moved': 'トンネルのアドレスが変わりました。再接続しました。',
     'autostop.running': '失敗したまま課金が続かないよう、インスタンスを停止中…',
     'autostop.done': 'インスタンスは自動で停止しました（down.sh）。',
-    'vm.probing': 'インスタンスを確認中', 'vm.runtime': 'ExLlamaV3 ランタイムを導入中',
+    'vm.probing': 'カードを確認中', 'vm.runtime': 'ExLlamaV3 ランタイムを導入中',
     'vm.weights': 'Hugging Face から重みを取得中', 'vm.env': '起動環境を書き込み中',
     'vm.bootstrapped': 'ブートストラップ完了、モデルサーバーを起動中',
     'vm.loading': 'モデルを VRAM に読み込み中', 'vm.ready': 'モデルサーバー正常',
     'vm.serve_failed': 'モデルサーバーの起動に失敗', 'vm.serve_timeout': 'モデルサーバーが正常になりません',
     'vm.ready_no_tunnel': '正常だがトンネル URL なし',
-    'exit.1': 'アップロードまたはブートストラップに失敗しました。下のログを参照してください。',
-    'exit.2': '引数エラー。',
+    'exit.1': 'アップロードまたはブートストラップに失敗しました。ログを参照してください。',
+    'exit.2': 'レシピまたは引数に誤りがあります。ログを参照してください。',
     'exit.3': 'サーバー側のインスタンス数が上限です。先に別のセッションを停止してください。',
-    'exit.4': '割り当てが拒否されました。アカウントに A100 の資格がない可能性があります。',
+    'exit.4': '割り当てが拒否されました。アカウントにこのカードの資格がない可能性があります。',
     'exit.5': '割り当てを読めません。CLI の再ログインが必要かもしれません。',
-    'exit.6': '40 GB 標準カードが当たったため、返却して停止しました（約 0.13 CU）。もう一度押すと再抽選します。',
+    'exit.6': 'レシピの VRAM に満たないカードが当たったため、返却して停止しました（約 0.13 CU）。もう一度「起動」で再抽選します。',
     'exit.7': 'エンドポイント待ちがタイムアウトしました（既定 50 分）。',
     'exit.8': 'モデルサーバーが起動しませんでした。/content/serve.log を参照してください。',
     'exit.9': 'VM 上では正常ですが、トンネルが URL を公開しませんでした。/content/tunnel.log を参照してください。',
     'exit.other': 'ログを参照してください。',
     'reason.manual': '手動', 'reason.idle': 'アイドル', 'reason.max_hours': '連続上限',
     'reason.job_timeout': 'ジョブタイムアウト', 'reason.failed': '失敗', 'reason.stale': '未クローズのセッション',
-    'foot.control': 'コントロールプレーン：WSL → colab CLI → restore.py → up.sh',
+    'reason.vm_gone': 'VM 消失',
+    'foot.control': 'コントロールプレーン：WSL → colab CLI → recipe.py → up.sh',
     'foot.external': '外部エンドポイント {base}。このマシンからはインスタンスを申請していません。',
     'foot.billing': '課金開始：{card} · {cuph} CU/h',
     'foot.stopped': '停止しました（{reason}）。コントロールプレーンは稼働中、VM は停止。',
     'foot.failed': '失敗。今回は約 {cu} CU かかりました。',
+    'foot.adopted': '引き継ぎ済み：セッション {session} の {card} · ここで課金管理・停止できます',
     'code.unknown_recipe': 'そのレシピはありません。',
     'code.attached': '外部エンドポイント（{base}）に接続中です。自分のカードを使うには --external-endpoint を付けずにフロントエンドを再起動してください。',
     'code.busy': '処理中：{stage}。',
     'code.already': 'このレシピはすでに稼働中です。',
-    'code.stop_first': 'すでにインスタンスが稼働中です。レシピを切り替える前に停止してください（切り替え＝再ロード）。',
+    'code.stop_first': 'すでにカードが稼働中です。レシピを切り替える前に停止してください（切り替え＝再ロード）。',
     'code.stale_ledger': '以前のセッションが閉じられていません。先に「停止」を押して、停止と記帳を済ませてください。',
-    'code.budget': '今月の残りは {left} CU で、今回の起動見積もり {need} CU を下回っています。',
+    'code.budget': '残りは {left} CU で、今回の起動見積もり {need} CU を下回っています。',
     'code.nothing_to_stop': '現在、課金中のインスタンスはありません。',
     'code.already_stopping': 'すでに停止中です。',
     'code.detached': '外部エンドポイントから切断しました。',
     'code.error': 'リクエスト失敗：{err}',
+    'code.coupled': '接続しました。', 'code.not_live': 'このセッションで稼働中の VM はありません。',
+    'code.not_ready': 'VM は稼働中ですが、サービスがまだ起動していません。',
+    'code.unreachable': 'VM 上でサービスは起動していますが、ここから接続できません。',
+    'code.cooling': 'この VM は停止した直後です。少し待ってから引き継ぎます。',
+    'code.probe_failed': 'どのセッションが稼働中か Colab に確認できません（colab sessions が応答しません）。',
+    'code.placeholder': 'このレシピはまだ実行できません。',
+    'code.superseded': '確認中に停止または新しい起動があったため、何も引き継いでいません。',
   },
 };
 const HTML_LANG = { en: 'en', zh: 'zh-CN', ja: 'ja' };
 const LOCALE = { en: 'en-US', zh: 'zh-CN', ja: 'ja-JP' };
 const STEPS = ['requesting', 'uploading', 'bootstrapping', 'loading', 'ready'];
 const BUSY = ['requesting', 'uploading', 'bootstrapping', 'loading', 'stopping'];
-const QUIET = ['confirm_required', 'started', 'cancelled', 'stopping'];
+const QUIET = ['confirm_required', 'started', 'cancelled', 'stopping', 'coupling'];
+// the recipe facts a card shows, in this order (the registry may carry more)
+const FACT_ORDER = ['prefill_tps', 'decode_tps', 'context', 'vision', 'concurrency', 'vram_mib', 'weights', 'eta_min'];
+
+// Icons: 24-unit strokes, drawn in currentColor so they follow the colour block.
+const ICONS = {
+  cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  memory: '<path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9M2 15h20"/><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.1a2 2 0 0 0 0 3.837V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5.1a2 2 0 0 0 0-3.837Z"/>',
+  disk: '<path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01M10 16h.01"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
+  pulse: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  hourglass: '<path d="M5 22h14M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  shieldoff: '<path d="m2 2 20 20"/><path d="M5 5a1 1 0 0 0-1 1v7c0 5 3.5 7.5 7.67 8.94a1 1 0 0 0 .67.01c2.35-.82 4.48-1.97 5.9-3.71"/><path d="M9.309 3.652A12.252 12.252 0 0 0 11.24 2.28a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1v7a9.784 9.784 0 0 1-.08 1.264"/>',
+  coins: '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18M7 6h1v4M16.71 13.88l.7.71-2.82 2.82"/>',
+  flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+  battery: '<rect x="2" y="7" width="16" height="10" rx="2"/><path d="M22 11v2M6 11v2M10 11v2"/>',
+  receipt: '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8M12 17.5v-11"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+  thermo: '<path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/>',
+  zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff: '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143M2 2l20 20"/>',
+  sliders: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
+  ruler: '<path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2M11.5 9.5l2-2M8.5 6.5l2-2M17.5 15.5l2-2"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
+  play: '<path d="M6 3.5v17a.5.5 0 0 0 .77.42l13-8.5a.5.5 0 0 0 0-.84l-13-8.5A.5.5 0 0 0 6 3.5Z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  okc: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  dashed: '<path d="M10.1 2.182a10 10 0 0 1 3.8 0M13.9 21.818a10 10 0 0 1-3.8 0M17.609 3.721a10 10 0 0 1 2.69 2.7M2.182 13.9a10 10 0 0 1 0-3.8M20.279 17.609a10 10 0 0 1-2.7 2.69M21.818 10.1a10 10 0 0 1 0 3.8M3.721 6.391a10 10 0 0 1 2.7-2.69M6.391 20.279a10 10 0 0 1-2.69-2.7"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  terminal: '<path d="m4 17 6-6-6-6M12 19h8"/>',
+  layers: '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65M22 12.65l-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+  timer: '<path d="M10 2h4M12 14l3-3"/><circle cx="12" cy="14" r="8"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5M3 12a9 3 0 0 0 18 0"/>',
+  scroll: '<path d="M15 12h-5M15 8h-5M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/>',
+  plug: '<path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/>',
+};
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function loadJSON(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || 'null') || fallback; } catch (e) { return fallback; }
+}
+function saveJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage blocked */ }
+}
 
 let lang = pickLang();
 let st = null;          // the last /control/status
@@ -603,6 +938,8 @@ let pending = false;    // a POST is in flight: every action waits for it (Start
 const drawn = {};       // section id -> markup it holds; unchanged sections are left alone,
                         // so buttons keep focus and <details> stay open between polls
 const openDetails = new Set();
+const folds = loadJSON('collabosm.folds', {});    // the viewer's own open/closed choices
+const choice = loadJSON('collabosm.choice', {});  // GPU id -> the recipe picked in its selector
 let toastTimer = null;
 
 function pickLang() {
@@ -633,6 +970,29 @@ function clock(sec) {
   return h ? h + ':' + two(m) + ':' + two(s) : m + ':' + two(s);
 }
 
+function ago(ts) {
+  if (!ts) return '—';
+  const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  return s < 90 ? t('ago.s', { n: s }) : t('ago.m', { n: Math.round(s / 60) });
+}
+
+function dur(sec) {
+  if (sec === null || sec === undefined || !Number.isFinite(sec)) return '—';
+  const m = Math.round(sec / 60), h = Math.floor(m / 60);
+  return h ? t('dur.h', { h, m: m % 60 }) : t('dur.m', { m });
+}
+
+// 500224 -> "500K", 262144 -> "262K": a context size the way the repo and the model
+// cards write it (thousands, not KiB)
+function ktok(n) {
+  if (!n) return '—';
+  return n >= 1e6 ? num(n / 1e6, n % 1e6 ? 1 : 0) + 'M' : Math.round(n / 1000) + 'K';
+}
+
+function hostOf(url) {
+  try { return new URL(url).host; } catch (e) { return url || '—'; }
+}
+
 // A note from control.py, worded in the current language.
 function words(n, prefix) {
   if (!n || !n.k) return '';
@@ -647,13 +1007,29 @@ function words(n, prefix) {
 }
 
 function stoppable(s) {
-  return (BUSY.includes(s.stage) && s.stage !== 'stopping') || s.stage === 'ready'
-    || s.stage === 'failed' || (s.ledger_open && (s.stage === 'idle' || s.stage === 'stopped'));
+  return (BUSY.includes(s.stage) && s.stage !== 'stopping') || s.stage === 'ready' || s.stage === 'attached'
+    || s.stage === 'failed' || (s.ledger_open && (s.stage === 'idle' || s.stage === 'stopped'))
+    || (['idle', 'stopped'].includes(s.stage) && oursLive(s));
 }
 
-function btn(act, label, kind, attrs) {
+function oursLive(s) {
+  return ((s.billing && s.billing.sessions) || []).some((x) => x.ours);
+}
+
+function ico(name, cls) {
+  return '<svg class="ico' + (cls ? ' ' + cls : '') + '" viewBox="0 0 24 24" aria-hidden="true">'
+    + (ICONS[name] || '') + '</svg>';
+}
+
+function btn(act, label, kind, icon, attrs) {
   return '<button type="button" class="btn ' + (kind || '') + '" data-act="' + act + '" '
-    + (attrs || '') + (pending ? ' disabled' : '') + '>' + esc(label) + '</button>';
+    + (attrs || '') + (pending ? ' disabled' : '') + '>' + (icon ? ico(icon) : '') + esc(label) + '</button>';
+}
+
+// An icon and a value; the tooltip (data-t, bound in bindValues) says what it is.
+function chip(icon, key, cls) {
+  return '<span class="chip' + (cls ? ' ' + cls : '') + '" data-t="' + key + '" tabindex="0">' + ico(icon)
+    + (cls && cls.includes('only') ? '' : '<b data-v="' + key + '"></b>') + '</span>';
 }
 
 function put(id, html) {
@@ -662,14 +1038,71 @@ function put(id, html) {
   drawn[id] = html;
 }
 
+// ---- recipes (recipes.json, through /control/status) ---------------------- //
+function recipes() { return (st && st.recipes) || []; }
+function recipeById(id) { return recipes().find((r) => r.id === id) || null; }
+function currentRecipe() { return recipeById(st && st.selected); }
+
+// A GPU's selector lists the recipes that exist for that card, nothing else.
+function gpuRecipes(g) { return recipes().filter((r) => r.gpu === g.id); }
+function chosenRecipe(g) {
+  const list = gpuRecipes(g);
+  return list.find((r) => r.id === choice[g.id]) || list.find((r) => st && r.id === st.selected)
+    || list.find((r) => r.verified) || list.find((r) => r.runnable) || list[0] || null;
+}
+
+function fact(r, k) { return ((r && r.facts) || {})[k] || null; }
+
+function factValue(k, f) {
+  const v = f.v;
+  if (v === null || v === undefined) return '—';
+  if (k === 'prefill_tps') return num(v, 0) + ' t/s';
+  if (k === 'decode_tps') return num(v, 1) + ' t/s';
+  if (k === 'context') return ktok(v);
+  if (k === 'vision') return t(v ? 'vision.on' : 'vision.off');
+  if (k === 'vram_mib') return num(v / 1024, 1) + ' GiB';
+  if (k === 'weights') return num(v, 1) + ' GiB';
+  if (k === 'eta_min') return '~' + num(v, 0) + ' min';
+  return String(v);
+}
+
+// ---- folds ------------------------------------------------------------------- //
+function isOpen(id) {
+  if (id in folds) return !!folds[id];
+  const s = st ? st.stage : 'idle';
+  if (id === 'gpus') return ['idle', 'stopped', 'failed'].includes(s) || !!(st && st.confirm);
+  if (id === 'log') return s === 'failed';
+  return false;
+}
+
+function foldHTML(id, icon, title, body) {
+  const open = isOpen(id);
+  return '<h2><button type="button" class="fold-head" data-act="fold" data-fold="' + id + '" aria-expanded="'
+    + open + '" aria-controls="b-' + id + '">' + ico(icon) + '<span>' + esc(title) + '</span>'
+    + '<span class="fold-sum" data-v="sum-' + id + '"></span>' + ico('chevron', 'chev') + '</button></h2>'
+    + (open ? '<div class="fold-body" id="b-' + id + '">' + body() + '</div>' : '');
+}
+
 // ---- header ------------------------------------------------------------ //
+function stopTip(s) {
+  if (s.stage === 'attached') return t('tip.stop.attached');
+  if (s.stage === 'ready') return t('tip.stop.ready');
+  if (BUSY.includes(s.stage)) return t('tip.stop.job');
+  if (s.stage === 'failed') return t('tip.stop.failed');
+  if (s.ledger_open && !oursLive(s) && !s.vm) return t('tip.stop.stale');
+  return t('tip.stop.vm');
+}
+
 function renderHeader() {
   let cls = 'dot', label;
   if (down) label = t('hdr.unreachable');
   else if (!st) label = t('hdr.loading');
   else {
     const s = st.stage, name = t('stage.' + s, null, s);
-    if (s === 'ready' || s === 'attached') { cls += ' on'; label = name + ' · ' + (st.live_model || ''); }
+    if (s === 'ready' || s === 'attached') {
+      cls += (st.link && st.link.ok === false) ? '' : ' on';    // hollow while the tunnel is down
+      label = name + ' · ' + (st.live_model || '');
+    }
     else if (BUSY.includes(s)) {
       cls += ' busy';
       label = s === 'stopping' ? name : name + ' · ' + num(st.progress, 0) + '%';
@@ -683,7 +1116,8 @@ function renderHeader() {
   $('rehearsal').textContent = t('badge.rehearsal');
   $('stop').hidden = !(st && stoppable(st));
   $('stop').disabled = pending;
-  $('stop-label').textContent = t('btn.stop');
+  $('stop-label').textContent = t(st && st.stage === 'attached' ? 'btn.detach' : 'btn.stop');
+  if (st) $('stop').dataset.tip = stopTip(st);
   for (const b of document.querySelectorAll('#langs button')) {
     b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
   }
@@ -694,7 +1128,7 @@ function renderHeader() {
   $('toggle').setAttribute('aria-expanded', String(!collapsed));
 }
 
-// ---- sections ---------------------------------------------------------- //
+// ---- status: session, note, machine, compute units ------------------------ //
 function stepsHTML(s) {
   const at = s === 'ready' ? STEPS.length : STEPS.indexOf(s);
   const fill = s === 'ready' ? 1 : Math.max(0, at) / (STEPS.length - 1);
@@ -707,6 +1141,7 @@ function stepsHTML(s) {
 }
 
 function confirmHTML(w) {
+  const unmeasured = w.status && w.status !== 'verified';
   return '<div class="confirm" role="group" aria-label="' + esc(t('confirm.head')) + '">'
     + '<h3>' + esc(t('confirm.head')) + '</h3>'
     + '<div class="who"><b>' + esc(w.card) + '</b><span>' + esc(w.model) + '</span></div>'
@@ -717,102 +1152,167 @@ function confirmHTML(w) {
     + '</div>'
     + '<p class="usd">' + esc(t('confirm.usd', { usd: num(w.usd_per_hour, 2) })) + '</p>'
     + '<ul>'
+    + (unmeasured ? '<li class="warn">' + esc(t('confirm.unmeasured')) + '</li>' : '')
+    + (w.rate_measured === false ? '<li class="warn">' + esc(t('confirm.rate')) + '</li>' : '')
     + '<li>' + esc(t('confirm.load', { need: num(w.cu_estimate, 1) })) + '</li>'
     + '<li>' + esc(t('confirm.stops', { idle: num(w.idle_stop_min, 0), max: num(w.max_session_h, 0) })) + '</li>'
-    + '<li>' + esc(t('confirm.budget', { budget: num(w.budget_cu, 0), left: num(w.cu_left, 1),
-                                          after: num(w.cu_left_after, 1) })) + '</li>'
+    + '<li>' + esc(w.balance_real
+        ? t('confirm.balance', { left: num(w.cu_left, 1), after: num(w.cu_left_after, 1) })
+        : t('confirm.budget', { budget: num(w.budget_cu, 0), left: num(w.cu_left, 1),
+                                after: num(w.cu_left_after, 1) })) + '</li>'
     + '</ul>'
-    + '<div class="actions">' + btn('go', t('btn.go'), 'primary') + btn('cancel', t('btn.cancel')) + '</div>'
+    + '<div class="actions">' + btn('go', t('btn.go'), 'primary', 'play') + btn('cancel', t('btn.cancel')) + '</div>'
     + '</div>';
 }
 
-function endpointRows(ep) {
-  return '<dt>' + esc(t('row.model')) + '</dt><dd>' + esc(st.live_model || '—') + '</dd>'
-    + '<dt>' + esc(t('row.endpoint')) + '</dt><dd class="mono" title="' + esc(ep.base || '') + '">'
-    + esc(ep.base || '—') + '</dd>';
+function sessionChips() {
+  const ep = st.endpoint || {}, L = st.link || {}, K = st.keepalive || {};
+  let h = '<div class="chips">'
+    + '<button type="button" class="chip wide" data-act="copy" data-t="host">' + ico('link')
+    + '<b class="mono" data-v="host"></b></button>'
+    + chip('pulse', 'link', L.ok === false ? 'alert' : '');
+  if (st.stage === 'ready') {
+    h += chip('hourglass', 'idle', st.idle_policy === 'off' ? 'off' : '')
+      + chip('clock', 'uptime')
+      + chip(K.holding ? 'shield' : 'shieldoff', 'hold', 'only' + (K.holding ? (K.ok === false ? ' alert' : '') : ' off'))
+      + chip('key', 'key', 'only' + (ep.key ? '' : ' off'));
+  }
+  return h + '</div>';
 }
 
-function sessionHTML() {
-  const s = st.stage, moving = BUSY.includes(s) && s !== 'stopping';
-  const ep = st.endpoint || {};
-  let h = '<h2>' + esc(t('sec.session')) + '</h2>'
-    + '<div class="state"><b>' + esc(t('stage.' + s, null, s)) + '</b>'
-    + (moving ? '<span class="pct" data-v="pct"></span>' : '') + '</div>';
-  if (moving || s === 'ready') h += stepsHTML(s);
-  if (moving) h += '<div class="bar"><i data-w="bar"></i></div>';
-  h += '<p class="note" data-v="note"></p>';
-  if (st.confirm) h += confirmHTML(st.confirm);
-  if (s === 'ready') {
-    const key = ep.key ? t('key.held') : ep.key_pending ? t('key.pending') : t('key.none');
-    h += '<dl class="kv">' + endpointRows(ep)
-      + '<dt>' + esc(t('row.key')) + '</dt><dd>' + esc(key) + '</dd>'
-      + '<dt>' + esc(t('row.idle')) + '</dt><dd data-v="idle"></dd>'
-      + '<dt>' + esc(t('row.uptime')) + '</dt><dd data-v="uptime"></dd></dl>'
-      + btn('stop', t('btn.stopbill'));
-  } else if (s === 'attached') {
-    h += '<dl class="kv">' + endpointRows(ep) + '</dl>'
-      + '<p class="fine">' + esc(t('attached.body')) + '</p>' + btn('stop', t('btn.detach'));
-  } else if (s === 'failed') {
-    h += btn('stop', t('btn.stopagain'));
-  } else if (st.ledger_open && (s === 'idle' || s === 'stopped')) {
-    h += btn('stop', t('btn.stopstale'), 'primary');
-  }
-  return h;
+function res(key, icon) {
+  return '<div class="res" data-t="' + key + '" tabindex="0">' + ico(icon)
+    + '<div class="bar"><i data-w="' + key + '"></i></div><b data-v="' + key + '"></b></div>';
 }
 
-function recipesHTML() {
-  const s = st.stage;
-  const locked = pending || BUSY.includes(s) || s === 'ready' || s === 'attached' || !!st.confirm;
-  let h = '<h2>' + esc(t('sec.recipes')) + '</h2>';
-  for (const r of st.recipes || []) {
-    const sel = st.selected === r.id, running = s === 'ready' && sel;
-    const note = r.note ? (r.note[lang] || r.note.en || '') : '';
-    h += '<article class="recipe' + (sel ? ' sel' : '') + '">'
-      + '<div class="top"><b>' + esc(r.card) + '</b><span class="tags">'
-      + (sel ? '<span class="tag solid">' + esc(t('tag.current')) + '</span>' : '')
-      + (r.verified ? '' : '<span class="tag">' + esc(t('tag.unverified')) + '</span>')
-      + '</span></div>'
-      + '<div class="sub">' + esc(r.model) + ' · ' + esc(r.quant) + '</div>'
-      + '<div class="specs">'
-      + '<div><b>' + num(r.cu_per_hour, 2) + '</b><small>' + esc(t('spec.cuph')) + '</small></div>'
-      + '<div><b>' + num(r.vram_gb, 0) + '</b><small>' + esc(t('spec.vram')) + '</small></div>'
-      + '<div><b>~' + num(r.eta_min, 0) + '</b><small>' + esc(t('spec.eta')) + '</small></div>'
-      + '</div>'
-      + (note ? '<p class="fine">' + esc(note) + '</p>' : '')
-      + '<button type="button" class="btn' + (running ? ' primary' : '') + '" data-act="pick" data-r="'
-      + esc(r.id) + '"' + (locked ? ' disabled' : '') + '>'
-      + esc(t(running ? 'recipe.running' : 'recipe.pick')) + '</button>'
-      + '</article>';
-  }
-  return h;
+function machineHTML() {
+  const m = st.machine, sv = st.server || {}, g = (m && m.gpu) || {};
+  let h = '<div class="blk"><div class="sub">' + ico('server') + '<span>' + esc(t('sec.machine')) + '</span>'
+    + (m ? '<span class="tag" data-t="msrc" tabindex="0">' + esc(t(m.local ? 'machine.local' : 'machine.server')) + '</span>' : '')
+    + '</div>';
+  if (m) h += res('vram', 'cpu') + res('ram', 'memory') + res('disk', 'disk');
+  else h += '<p class="fine">' + esc(t('machine.none')) + '</p>';
+  const chips = [];
+  if (g.util_pct != null) chips.push(chip('gauge', 'util'));
+  if (g.temp_c != null) chips.push(chip('thermo', 'temp'));
+  if (g.power_w != null) chips.push(chip('zap', 'power'));
+  if (sv.context && sv.context.max_positions) chips.push(chip('ruler', 'ctx'));
+  if (sv.vision) chips.push(chip(sv.vision.available ? 'eye' : 'eyeoff', 'vision',
+                                 'only' + (sv.vision.available ? '' : sv.vision.enabled ? ' alert' : ' off')));
+  if (sv.launch && sv.launch.cache_size) chips.push(chip('sliders', 'launch', 'only'));
+  if (chips.length) h += '<div class="chips">' + chips.join('') + '</div>';
+  return h + '</div>';
 }
 
 function moneyHTML() {
-  return '<h2>' + esc(t('sec.money')) + '</h2>'
-    + '<div class="figure"><b data-v="used"></b><span>' + esc(t('money.used')) + '</span></div>'
-    + '<div class="meter"><i data-w="meter"></i></div>'
-    + '<p class="fine" data-v="left"></p>'
-    + '<dl class="kv">'
-    + '<dt>' + esc(t('row.session')) + '</dt><dd data-v="session"></dd>'
-    + '<dt>' + esc(t('row.idlestop')) + '</dt><dd>' + esc(t('unit.min', { n: num(st.idle_stop_min, 0) })) + '</dd>'
-    + '<dt>' + esc(t('row.ceiling')) + '</dt><dd>' + esc(t('unit.h', { n: num(st.max_session_h, 0) })) + '</dd>'
-    + '</dl>';
+  const b = st.balance;
+  return '<div class="blk"><div class="sub">' + ico('coins') + '<span>' + esc(t('sec.money')) + '</span>'
+    + (b ? '<span class="tag">' + esc(t('money.src')) + '</span>' : '') + '</div>'
+    + '<div class="figure' + (b ? '' : ' none') + '" data-t="balance" tabindex="0"><b data-v="balance"></b><span>CU</span></div>'
+    + '<div class="chips">' + chip('flame', 'burn') + chip('battery', 'left')
+    + (st.ledger_open ? chip('receipt', 'session') : '') + chip('cloud', 'billing') + '</div></div>';
+}
+
+function statusHTML() {
+  const s = st.stage, moving = BUSY.includes(s) && s !== 'stopping', live = s === 'ready' || s === 'attached';
+  const rec = currentRecipe();
+  let h = '<div class="state"><b>' + esc(t('stage.' + s, null, s)) + '</b>'
+    + (s === 'ready' && st.adopted ? '<span class="tag solid" data-t="adopted" tabindex="0">' + esc(t('tag.adopted')) + '</span>' : '')
+    + (moving ? '<span class="pct" data-v="pct"></span>' : '') + '</div>';
+  if (live || moving) {
+    const model = st.live_model || (rec && rec.model);
+    if (model) h += '<div class="who">' + esc(model) + (rec && s !== 'attached' ? ' · ' + esc(rec.card) : '') + '</div>';
+  }
+  if (moving) h += stepsHTML(s) + '<div class="bar"><i data-w="bar"></i></div>';
+  if (live) h += sessionChips();
+  h += '<p class="note" data-v="note"></p>';
+  if (s === 'attached') h += '<p class="fine">' + esc(t('attached.body')) + '</p>';
+  if (st.confirm) h += confirmHTML(st.confirm);
+  if (s === 'ready' || st.machine) h += machineHTML();
+  h += moneyHTML();
+  const acts = [], ep = st.endpoint || {};
+  // a tunnel that stopped answering, or a ready box whose key never arrived
+  if (s === 'ready' && ((st.link && st.link.ok === false) || (!ep.key && !ep.key_pending))) {
+    acts.push(btn('couple', t('btn.couple'), 'primary', 'refresh'));
+  }
+  if (['idle', 'stopped', 'failed'].includes(s) && oursLive(st) && !st.coupling) acts.push(btn('couple', t('btn.adopt'), '', 'login'));
+  return h + acts.join('');
+}
+
+// ---- GPUs --------------------------------------------------------------------- //
+function factsHTML(r) {
+  const rows = FACT_ORDER.filter((k) => fact(r, k)).map((k) => {
+    const f = fact(r, k);
+    const tip = t(f.measured ? 'fact.measured' : 'fact.estimate', { src: f.src || '—' });
+    return '<li class="' + (f.measured ? '' : 'est') + '" data-tip="' + esc(tip) + '" tabindex="0">'
+      + ico(f.measured ? 'okc' : 'dashed', f.measured ? '' : 'est')
+      + '<span>' + esc(t('fact.' + k)) + '</span><b>' + esc(factValue(k, f)) + '</b></li>';
+  });
+  return rows.length ? '<ul class="facts">' + rows.join('') + '</ul>' : '';
+}
+
+function gpuHTML(g, locked) {
+  const list = gpuRecipes(g), r = chosenRecipe(g);
+  const running = !!r && st.stage === 'ready' && st.selected === r.id;
+  const rate = (g.facts || {}).cu_per_hour || {};
+  const how = (f) => t(f && f.measured ? 'how.measured' : 'how.estimate');
+  let h = '<article class="gpu' + (r && st.selected === r.id ? ' sel' : '') + '">'
+    + '<div class="top"><b>' + esc(g.card) + '</b>'
+    + (running ? '<span class="tag solid">' + esc(t('tag.current')) + '</span>' : '') + '</div>'
+    + '<div class="chips">'
+    + '<span class="chip' + (rate.measured ? '' : ' off') + '" tabindex="0" data-tip="' + esc(t('tip.rate', { how: how(rate) }))
+    + '">' + ico('coins') + '<b>' + num(g.cu_per_hour, 2) + '/h</b></span>'
+    + '<span class="chip" tabindex="0" data-tip="' + esc(t('tip.gvram')) + '">' + ico('cpu') + '<b>' + num(g.vram_gb, 0) + ' GB</b></span>'
+    + (g.ram_gb ? '<span class="chip" tabindex="0" data-tip="' + esc(t('tip.gram')) + '">' + ico('memory') + '<b>' + num(g.ram_gb, 0) + ' GB</b></span>' : '')
+    + '</div>';
+  if (list.length) {
+    h += '<label class="pick">' + ico('box', 'l')
+      + '<select data-gpu="' + esc(g.id) + '" aria-label="' + esc(t('model.label') + ' · ' + g.card) + '">'
+      + list.map((x) => '<option value="' + esc(x.id) + '"' + (r && x.id === r.id ? ' selected' : '') + '>'
+        + esc(x.model + ' · ' + (x.quant || '') + ' — ' + t('status.' + x.status, null, x.status)) + '</option>').join('')
+      + '</select>' + ico('chevron', 'r') + '</label>';
+  }
+  if (r) h += factsHTML(r);
+  const can = !!r && r.runnable && !locked;
+  h += '<button type="button" class="btn' + (running ? ' primary' : '') + '" data-act="pick" data-r="'
+    + esc(r ? r.id : '') + '"' + (can && !pending ? '' : ' disabled') + '>'
+    + ico(running ? 'check' : 'play')
+    + esc(t(running ? 'recipe.running' : (r && r.runnable ? 'recipe.pick' : 'recipe.na'))) + '</button>';
+  return h + '</article>';
+}
+
+function gpusHTML() {
+  const s = st.stage;
+  const locked = BUSY.includes(s) || s === 'ready' || s === 'attached' || !!st.confirm || !!st.downing;
+  return (st.gpus || []).map((g) => gpuHTML(g, locked)).join('');
+}
+
+// ---- speed ------------------------------------------------------------------- //
+function referenceRecipe() {
+  return currentRecipe() || recipes().find((r) => r.verified) || recipes()[0] || null;
+}
+
+function stat(label, val, digits, tipKey) {
+  return '<div class="stat" tabindex="0" data-tip="' + esc(t(tipKey)) + '"><small>' + label + '</small><b>'
+    + (val === null || val === undefined ? '—' : num(val, digits)) + '</b><span>t/s</span></div>';
 }
 
 function speedHTML() {
-  // `metrics` is a live measurement when something takes one; until then these are
-  // the repo's reference numbers, and they are labelled as exactly that.
-  const live = st.metrics, m = st.measured || {}, src = live || m;
-  return '<h2>' + esc(t('sec.speed')) + '<span class="tag">' + esc(t(live ? 'speed.live' : 'speed.ref'))
-    + '</span></h2>'
-    + '<div class="pair">'
-    + '<div class="stat"><small>PREFILL</small><b>' + num(src.prefill, 0) + '</b><span>t/s</span></div>'
-    + '<div class="stat"><small>DECODE</small><b>' + num(src.decode, 1) + '</b><span>t/s</span></div>'
-    + '</div>'
-    + (live ? '' : '<p class="fine">' + esc(t('speed.where', { date: m.measured_on || '', card: m.card || '' }))
-        + ' ' + esc(t('speed.gcs', { n: num(m.prefill_gcs8192, 0) })) + '</p>');
+  const live = st.metrics, r = referenceRecipe();
+  const pre = live ? live.prefill : (fact(r, 'prefill_tps') || {}).v;
+  const dec = live ? live.decode : (fact(r, 'decode_tps') || {}).v;
+  let h = '<div class="pair">' + stat('PREFILL', pre, 0, 'tip.prefill') + stat('DECODE', dec, 1, 'tip.decode') + '</div>';
+  if (live) {
+    h += '<div class="chips">' + chip('timer', 'ttft') + chip('database', 'hit') + '</div>'
+      + '<p class="fine" data-v="speedsrc"></p>';
+  } else if (r) {
+    const name = r.card + ' · ' + r.model;
+    h += '<p class="fine">' + esc(t(pre === null || pre === undefined ? 'speed.none' : 'speed.where', { recipe: name })) + '</p>';
+  }
+  return h;
 }
 
+// ---- connection, log ------------------------------------------------------------ //
 function details(id, summary, body) {
   return '<details data-d="' + id + '"' + (openDetails.has(id) ? ' open' : '') + '><summary>'
     + esc(summary) + '</summary><pre>' + esc(body) + '</pre></details>';
@@ -820,69 +1320,193 @@ function details(id, summary, body) {
 
 function connHTML() {
   const cli = st.cli || {}, bill = st.billing || {};
-  const billing = (bill.count === null || bill.count === undefined) ? t('billing.unknown') : num(bill.count, 0);
-  return '<h2>' + esc(t('sec.conn')) + '</h2>'
-    + '<dl class="kv">'
-    + '<dt>' + esc(t('row.cli')) + '</dt><dd>' + esc(t('cli.' + (cli.colab || 'unknown'), null, cli.colab)) + '</dd>'
-    + '<dt>' + esc(t('row.wsl')) + '</dt><dd>' + esc(cli.wsl || '—') + '</dd>'
-    + '<dt>' + esc(t('row.billing')) + '</dt><dd>' + esc(billing) + '</dd>'
-    + '</dl>'
+  const sessions = bill.sessions || [];
+  return '<div class="chips">' + chip('terminal', 'cli', cli.colab === 'missing' ? 'alert' : '') + chip('layers', 'wsl') + '</div>'
+    + (sessions.length ? '<ul class="list">' + sessions.map((x) => '<li>' + ico('cloud')
+        + '<span>' + esc((x.name || '?') + ' · ' + (x.hardware || '?')) + '</span>'
+        + (x.ours ? '<span class="tag solid">' + esc(t('session.ours')) + '</span>' : '')
+        + '<span class="mono">' + esc(x.endpoint || '') + '</span></li>').join('') + '</ul>' : '')
     + details('cmd', t('det.command'), cli.command || t('det.command.none'))
     + details('bill', t('det.billing'), bill.raw || t('det.billing.none'));
 }
 
 function logHTML() {
-  return '<h2>' + esc(t('sec.log')) + '</h2><pre class="log" data-v="log"></pre>'
-    + '<p class="fine" data-v="foot"></p>';
+  return '<pre class="log" data-v="log"></pre><p class="fine" data-v="foot"></p>';
 }
 
-// Values that change every poll are bound into the drawn markup, not drawn into it.
+// ---- values that change every poll are bound, not drawn -------------------------- //
 function bindValues() {
-  const v = {
-    pct: num(st.progress, 0) + '%',
-    note: words(st.note, 'note.'),
-    idle: st.idle_left_s === null || st.idle_left_s === undefined ? '—' : clock(st.idle_left_s),
-    uptime: clock((st.session_hours || 0) * 3600),
-    used: num(st.cu_used, 2),
-    left: t('money.left', { left: num(st.cu_left, 1), budget: num(st.budget_cu, 0) }),
-    session: t('unit.h', { n: num(st.session_hours, 2) }),
-    log: (st.log_tail || []).slice(-10).join('\n') || t('log.empty'),
-    foot: words(st.foot, ''),
-  };
-  const w = {
-    bar: Math.max(0, Math.min(100, st.progress || 0)),
-    meter: st.budget_cu ? Math.min(100, (100 * (st.cu_used || 0)) / st.budget_cu) : 0,
-  };
+  const v = {}, w = {}, tips = {};
+  const ep = st.endpoint || {}, L = st.link || {}, K = st.keepalive || {}, b = st.balance;
+  const mc = st.machine || {}, g = mc.gpu || {}, ram = mc.ram || {}, disk = mc.disk || {};
+  const sv = st.server || {}, launch = sv.launch || {}, ctx = sv.context || {}, bill = st.billing || {};
+  const probed = ago(st.machine_at || st.server_at);
+
+  v.pct = num(st.progress, 0) + '%';
+  v.note = words(st.note, 'note.');
+  w.bar = Math.max(0, Math.min(100, st.progress || 0));
+
+  v.host = hostOf(ep.base);
+  tips.host = t('tip.endpoint', { url: ep.base || '—' });
+  v.link = L.ok === true ? t('link.ok', { ms: num(L.latency_ms, 0) })
+    : L.ok === false ? t('link.down', { n: L.fails || 0 }) : t('link.unknown');
+  tips.link = t('tip.link');
+  const idleOff = st.idle_policy === 'off';
+  v.idle = idleOff ? '∞' : st.idle_left_s === null || st.idle_left_s === undefined ? '—' : clock(st.idle_left_s);
+  tips.idle = t(idleOff ? 'tip.idle.off' : 'tip.idle', { idle: num(st.idle_stop_min, 0), max: num(st.max_session_h, 0) });
+  v.uptime = clock((st.session_hours || 0) * 3600);
+  tips.uptime = t('tip.uptime');
+  tips.hold = !K.holding ? t('tip.hold.idle')
+    : K.ok === false ? (K.err === 'gone' ? t('tip.hold.gone') : t('tip.hold.err', { err: K.err || '?' }))
+    : K.at ? t('tip.hold.on', { ago: ago(K.at) }) : t('tip.hold.pending');
+  tips.key = t(ep.key ? 'tip.key.held' : ep.key_pending ? 'tip.key.pending' : 'tip.key.none');
+  tips.adopted = t('tip.adopted');
+
+  tips.msrc = t(mc.local ? 'tip.msrc.local' : 'tip.msrc.server', { ago: probed });
+  v.vram = g.total_mib ? t('res.used', { used: num(g.used_mib / 1024, 1), total: num(g.total_mib / 1024, 1) }) : '—';
+  v.ram = ram.total_gib ? t('res.used', { used: num(ram.used_gib, 1), total: num(ram.total_gib, 1) }) : '—';
+  v.disk = disk.total_gib ? t('res.free', { free: num(disk.free_gib, 0), total: num(disk.total_gib, 0) }) : '—';
+  w.vram = g.total_mib ? (100 * (g.used_mib || 0)) / g.total_mib : 0;
+  w.ram = ram.total_gib ? (100 * (ram.used_gib || 0)) / ram.total_gib : 0;
+  w.disk = disk.total_gib ? 100 * (1 - (disk.free_gib || 0) / disk.total_gib) : 0;
+  tips.vram = t('tip.vram') + ' · ' + tips.msrc;
+  tips.ram = t('tip.ram') + ' · ' + tips.msrc;
+  tips.disk = t('tip.disk') + ' · ' + tips.msrc;
+  v.util = g.util_pct != null ? num(g.util_pct, 0) + '%' : '—';
+  v.temp = g.temp_c != null ? num(g.temp_c, 0) + '°C' : '—';
+  v.power = g.power_w != null ? num(g.power_w, 0) + ' W' : '—';
+  tips.util = t('tip.util', { name: g.name || 'GPU' });
+  tips.temp = t('tip.temp');
+  tips.power = t('tip.power');
+  v.ctx = ktok(ctx.max_positions);
+  tips.ctx = ctx.yarn_factor ? t('tip.ctx.yarn', { f: ctx.yarn_factor, native: num(ctx.native, 0) }) : t('tip.ctx.native');
+  tips.vision = !sv.vision ? '' : sv.vision.available ? t('tip.vision.on')
+    : sv.vision.enabled ? t('tip.vision.err', { err: sv.vision.error || '?' }) : t('tip.vision.off');
+  tips.launch = launch.cache_size ? t('tip.launch', { cache: num(launch.cache_size, 0), cq: launch.cache_quant,
+      gcs: launch.generator_chunk_size, ccs: num(launch.cpu_cache_gb, 0), rcs: num(launch.recurrent_cache_gb, 0),
+      ndt: launch.num_draft_tokens })
+    + (sv.uptime_s != null ? ' · ' + t('machine.up', { up: dur(sv.uptime_s) }) : '') : '';
+
+  const burning = !!(b && b.assignments && b.rate && b.cu !== null && b.cu !== undefined);
+  v.balance = b ? num(b.cu, 2) : '—';
+  tips.balance = b ? t('tip.balance', { ago: ago(b.checked_at) }) : t('money.unknown');
+  v.burn = b ? num(burning ? b.rate : 0, 2) + '/h' : '—';
+  tips.burn = b ? t(burning ? 'tip.burn' : 'tip.burn.none', { n: b.assignments || 0 }) : t('money.unknown');
+  v.left = burning ? dur((b.cu / b.rate) * 3600) : '—';
+  tips.left = t('tip.left');
+  v.session = st.ledger_open && st.session_cu != null ? num(st.session_cu, 2) + ' CU' : '—';
+  tips.session = t('tip.session', { h: num(st.session_hours, 2) });
+  v.billing = bill.count === null || bill.count === undefined ? '?' : String(bill.count);
+  tips.billing = bill.count === null || bill.count === undefined ? t('billing.unknown')
+    : t('tip.billing') + (bill.ok === false ? ' · ' + t('billing.stale') : '');
+
+  const m = st.metrics;
+  if (m) {
+    const hit = m.prompt_total ? (100 * (m.cache_n || 0)) / m.prompt_total : null;
+    v.ttft = m.ttft_s == null ? '—' : num(m.ttft_s, 2) + ' s';
+    v.hit = hit === null ? '—' : num(hit, 0) + '%';
+    v.speedsrc = t(m.source === 'server' ? 'speed.src.server' : 'speed.src.proxy', { ago: ago(m.at) });
+  }
+  tips.ttft = t('tip.ttft');
+  tips.hit = t('tip.hit');
+
+  const cli = st.cli || {};
+  v.cli = t('cli.' + (cli.colab || 'unknown'), null, cli.colab);
+  tips.cli = t('tip.cli');
+  v.wsl = cli.wsl || '—';
+  tips.wsl = t('tip.wsl');
+  v.log = (st.log_tail || []).slice(-10).join('\n') || t('log.empty');
+  v.foot = words(st.foot, '');
+
+  const run = currentRecipe(), ref = referenceRecipe();
+  v['sum-gpus'] = st.stage === 'ready' && run ? t('gpus.running', { card: run.card })
+    : t('gpus.sum', { n: (st.gpus || []).length, r: recipes().filter((r) => r.runnable).length });
+  const pre = m ? m.prefill : (fact(ref, 'prefill_tps') || {}).v, dec = m ? m.decode : (fact(ref, 'decode_tps') || {}).v;
+  v['sum-speed'] = (pre == null && dec == null) ? '—'
+    : t(m ? 'speed.live' : 'speed.ref') + ' · ' + num(pre, 0) + ' / ' + num(dec, 1) + ' t/s';
+  v['sum-conn'] = t('conn.sum', { cli: v.cli, n: v.billing });
+  v['sum-log'] = (st.log_tail || []).slice(-1)[0] || '';
+
   // Widths first, before anything below reads layout: a bar that was just drawn
   // must be born at its width. Set after a layout read, it transitions up from 0
   // instead -- every stage change replayed the bar from empty, and in a page that
   // is not painting (a background tab) it stayed at 0.
-  for (const el of $('rail').querySelectorAll('[data-w]')) {
+  const rail = $('rail');
+  for (const el of rail.querySelectorAll('[data-w]')) {
     const pct = Math.round((w[el.dataset.w] || 0) * 10) / 10 + '%';   // reads back identically
     if (el.style.width !== pct) el.style.width = pct;
   }
-  for (const el of $('rail').querySelectorAll('[data-v]')) {
+  for (const el of rail.querySelectorAll('[data-v]')) {
     const val = v[el.dataset.v] ?? '';
     if (el.textContent === val) continue;
     const stick = el.tagName === 'PRE' && el.scrollHeight - el.scrollTop - el.clientHeight < 8;
     el.textContent = val;
     if (stick) el.scrollTop = el.scrollHeight;
   }
+  for (const el of rail.querySelectorAll('[data-t]')) {
+    const tx = tips[el.dataset.t] ?? '';
+    const val = el.querySelector('[data-v]');
+    const label = val && val.textContent ? tx + ' · ' + val.textContent : tx;
+    if (el.dataset.tip !== tx) el.dataset.tip = tx;
+    if (el.getAttribute('aria-label') !== label) el.setAttribute('aria-label', label);
+  }
+  if (tipFor) {
+    if (!document.contains(tipFor)) hideTip();
+    else if ($('tip').textContent !== tipFor.dataset.tip) showTip(tipFor);
+  }
 }
 
 function render() {
   renderHeader();
   if (!st) return;
-  put('s-session', sessionHTML());
-  put('s-recipes', recipesHTML());
-  put('s-money', moneyHTML());
-  put('s-speed', speedHTML());
-  put('s-conn', connHTML());
-  put('s-log', logHTML());
+  put('s-status', statusHTML());
+  put('f-gpus', foldHTML('gpus', 'cpu', t('sec.gpus'), gpusHTML));
+  put('f-speed', foldHTML('speed', 'gauge', t('sec.speed'), speedHTML));
+  put('f-conn', foldHTML('conn', 'plug', t('sec.conn'), connHTML));
+  put('f-log', foldHTML('log', 'scroll', t('sec.log'), logHTML));
   bindValues();
 }
 
-// ---- talking to the control plane --------------------------------------- //
+// ---- tooltips: one floating box, placed where it fits ------------------------------ //
+let tipFor = null, tipTimer = null;
+function showTip(el) {
+  const text = el.dataset.tip;
+  const tip = $('tip');
+  // a redraw may have replaced the node since the hover began: its box is all zeros
+  if (!text || !document.contains(el)) return hideTip();
+  tip.textContent = text;
+  tip.hidden = false;
+  tipFor = el;
+  const r = el.getBoundingClientRect(), tr = tip.getBoundingClientRect();
+  let top = r.top - tr.height - 8;
+  if (top < 8) top = r.bottom + 8;
+  const left = Math.max(8, Math.min(r.left + r.width / 2 - tr.width / 2, innerWidth - tr.width - 8));
+  tip.style.top = Math.round(top) + 'px';
+  tip.style.left = Math.round(left) + 'px';
+}
+function hideTip() {
+  clearTimeout(tipTimer);
+  $('tip').hidden = true;
+  tipFor = null;
+}
+document.addEventListener('pointerover', (e) => {
+  const el = e.target.closest && e.target.closest('[data-tip]');
+  if (!el || el === tipFor) return;
+  clearTimeout(tipTimer);
+  tipTimer = setTimeout(() => showTip(el), 90);
+});
+document.addEventListener('pointerout', (e) => {
+  const el = e.target.closest && e.target.closest('[data-tip]');
+  if (el && !el.contains(e.relatedTarget)) hideTip();
+});
+document.addEventListener('focusin', (e) => {
+  const el = e.target.closest && e.target.closest('[data-tip]');
+  if (el) showTip(el);
+});
+document.addEventListener('focusout', hideTip);
+$('rail').addEventListener('scroll', hideTip, { passive: true });
+
+// ---- talking to the control plane ------------------------------------------------ //
 async function refresh() {
   try {
     const r = await fetch('/control/status', { cache: 'no-store' });
@@ -922,10 +1546,6 @@ function toast(text) {
 
 function say(r) {
   if (!r || !r.code || QUIET.includes(r.code)) return;
-  if (r.code === 'unverified') {
-    const rec = ((st && st.recipes) || []).find((x) => x.id === r.recipe);
-    return toast(rec && rec.note ? (rec.note[lang] || rec.note.en) : r.code);
-  }
   const a = Object.assign({}, r);
   if (r.stage) a.stage = t('stage.' + r.stage, null, r.stage);
   if (r.cu_left !== undefined) a.left = num(r.cu_left, 1);
@@ -948,13 +1568,37 @@ document.addEventListener('click', async (e) => {
   const lb = e.target.closest('[data-lang]');
   if (lb) return setLang(lb.dataset.lang);
   const b = e.target.closest('[data-act]');
-  if (!b || b.disabled || pending) return;
+  if (!b || b.disabled) return;
   const act = b.dataset.act;
+  // local actions: nothing is sent, so they never wait for a POST
+  if (act === 'fold') {
+    folds[b.dataset.fold] = !isOpen(b.dataset.fold);
+    saveJSON('collabosm.folds', folds);
+    hideTip();
+    return render();
+  }
+  if (act === 'copy') {
+    const url = st && st.endpoint && st.endpoint.base;
+    if (!url) return;
+    try { await navigator.clipboard.writeText(url); toast(t('copied')); } catch (err) { toast(url); }
+    return;
+  }
+  if (pending) return;
+  hideTip();
   if (act === 'pick') say(await post('/control/select', { recipe: b.dataset.r }));
   else if (act === 'go' && st && st.confirm) {
     say(await post('/control/select', { recipe: st.confirm.recipe, confirm: true }));
   } else if (act === 'cancel') say(await post('/control/cancel', {}));
   else if (act === 'stop') say(await post('/control/stop', {}));
+  else if (act === 'couple') say(await post('/control/couple', {}));
+});
+
+document.addEventListener('change', (e) => {
+  const s = e.target.closest && e.target.closest('select[data-gpu]');
+  if (!s) return;
+  choice[s.dataset.gpu] = s.value;
+  saveJSON('collabosm.choice', choice);
+  render();
 });
 
 document.addEventListener('toggle', (e) => {
@@ -966,11 +1610,13 @@ document.addEventListener('toggle', (e) => {
 function toggleRail(force) {
   const m = $('main');
   m.classList.toggle('collapsed', force === undefined ? !m.classList.contains('collapsed') : force);
+  hideTip();
   renderHeader();
 }
 $('toggle').addEventListener('click', () => toggleRail());
 addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleRail(); }
+  if (e.key === 'Escape') hideTip();
 });
 
 // Follow the WebUI's own light/dark mode (mode-watcher puts `dark` on its <html>).
