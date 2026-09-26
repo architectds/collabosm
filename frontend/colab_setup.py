@@ -48,8 +48,12 @@ import time
 import webbrowser
 
 # The version scripts/restore.py, colab_ccu.py and colab_keepalive.py are written
-# against: they use the CLI's internals, which a newer release may move.
-PIN = "google-colab-cli==0.6.0"
+# against: they use the CLI's internals, which a newer release may move. (They still
+# run on 0.6, whose record lacks the token's expiry and which still had a keep-alive
+# ping: scripts/colab_record.py. 0.7.4 also pins jupyter-kernel-client, whose 1.0
+# release left a fresh 0.6.0 install unable to run `colab exec`.)
+PIN = "google-colab-cli==0.7.4"
+PIN_VERSION = PIN.split("==")[1]
 WSL_PY = "$HOME/.local/share/uv/tools/google-colab-cli/bin/python"
 FAKE_ACCOUNT = "rehearsal@example.com"
 LOGIN_TIMEOUT_S = 300
@@ -483,7 +487,7 @@ class ColabSetup:
     # ---- rehearsal -------------------------------------------------------------- #
 
     def _fake_arrive(self, stage: str) -> None:
-        found = {"where": "native", "version": "0.6.0", "checked_at": time.time()}
+        found = {"where": "native", "version": PIN_VERSION, "checked_at": time.time()}
         if stage == "missing":
             self._set(stage="missing", checked_at=time.time())
         elif stage == "no_python":
@@ -504,14 +508,14 @@ class ColabSetup:
             self._set(stage="no_python", error={"k": "no_python", "a": {"have": "3.11"}})
             return
         for line in ("$ python -m venv ~/.collabosm/colab-cli", "$ python -m pip install " + PIN,
-                     "Collecting google-colab-cli==0.6.0",
+                     "Collecting " + PIN,
                      "Installing collected packages: google-colab-cli",
-                     "Successfully installed google-colab-cli-0.6.0"):
+                     "Successfully installed google-colab-cli-" + PIN_VERSION):
             time.sleep(0.6)
             self._tail(line)
         with self.lock:
             self.where = "native"
-        self._set(stage="signed_out", where="native", version="0.6.0", checked_at=time.time())
+        self._set(stage="signed_out", where="native", version=PIN_VERSION, checked_at=time.time())
 
     def _fake_login(self) -> None:
         for _ in range(25):                    # the consent "takes" 2.5 s

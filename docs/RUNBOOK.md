@@ -13,8 +13,9 @@ Operating notes for collabosm. Everything here is a thing that either bit us or 
 
 It is not a coin flip in your favour: **eleven consecutive unpatched attempts returned the 40 GB
 machine.** `scripts/restore.py` patches `Client._build_assign_url` to add `params["shape"] = "hm"`
-(`google-colab-cli#47` — `Shape.HIGH_RAM` exists and `machineShape` is parsed, but the field is never
-sent), then verifies and **stops** an unsuitable box so the retry costs ~0.13 CU instead of ~10.
+(`google-colab-cli#47` — in 0.6 `Shape.HIGH_RAM` exists and `machineShape` is parsed, but the field is
+never sent; 0.7.4 sends it itself, and the patch still applies there), then verifies and **stops** an
+unsuitable box so the retry costs ~0.13 CU instead of ~10.
 
 **Never detect the card by searching for "80".** An A100's compute capability is `sm_80`, so a 40 GB
 box prints "80" in every capability string and will pass a naive test. Compare `vram_GiB` (a 40 GB box
@@ -258,17 +259,19 @@ time to learn:
   column, and a `/v1` proxy on 3020 that Codex and Open WebUI use unchanged). An old install's
   `update-ui` has nothing left to pull; point clients at `http://127.0.0.1:3020/v1` instead.
 
-## Installing the CLI, and the one thing that breaks it
+## Installing the CLI, and the one thing that broke it
 
 ```bash
-uv tool install google-colab-cli
+uv tool install google-colab-cli==0.7.4
 ```
 
-Do **not** run `uv tool upgrade google-colab-cli`: it pulls `jupyter-kernel-client` 1.0.2, which
-removes `KernelClient` and breaks `colab exec` with `RuntimeError: Connection was lost`. Repair:
+Install the version the frontend pins (`google-colab-cli==0.7.4`): 0.7.4 pins `jupyter-kernel-client`
+0.9.0 itself. Under 0.6.0 an unpinned install pulled `jupyter-kernel-client` 1.0.2, which removes
+`KernelClient` and breaks `colab exec` with `RuntimeError: Connection was lost`. An old 0.6 install is
+repaired by upgrading it:
 
 ```bash
-uv pip install --python ~/.local/share/uv/tools/google-colab-cli/bin/python jupyter-kernel-client==0.9.0
+uv tool install --force google-colab-cli==0.7.4
 ```
 
 ## Model notes

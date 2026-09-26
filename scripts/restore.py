@@ -41,6 +41,9 @@ import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = os.path.expanduser("~/.config/colab-cli/sessions.json")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from colab_record import extra_fields, keep_alive  # noqa: E402 - either CLI version
 
 
 def _import_colab_cli():
@@ -92,9 +95,12 @@ def describe(assignment):
     return "%s accel=%s shape=%s" % (assignment.endpoint, accel, attached_shape(assignment))
 
 
-def register(state, SessionState, name, endpoint, token, url, accelerator, shape_note=""):
+def register(state, SessionState, name, endpoint, token, url, accelerator, shape_note="",
+             assignment=None):
+    # with the token's expiry where the CLI keeps one (0.7): scripts/colab_record.py
     state.store.add(SessionState(name=name, token=token, url=url, endpoint=endpoint,
-                                 variant="GPU", accelerator=accelerator))
+                                 variant="GPU", accelerator=accelerator,
+                                 **(extra_fields(SessionState, assignment) if assignment else {})))
     try:
         state.history.log_event(name, "session_registered",
                                 {"endpoint": endpoint, "accelerator": accelerator,
@@ -107,7 +113,14 @@ def maybe_keepalive(state, name, endpoint, want):
     if not want:
         return
     try:
-        from colab_cli.commands.session import spawn_keep_alive
+        from colab_cli.commands import session as cli_session
+        spawn_keep_alive = getattr(cli_session, "spawn_keep_alive", None)
+        if spawn_keep_alive is None:
+            # 0.7 has no keep-alive daemon: kernel activity holds a box, and the
+            # frontend's heartbeat (scripts/heartbeat.py) is that activity
+            print("[restore] --keepalive: this CLI has no keep-alive daemon; the frontend's "
+                  "heartbeat holds a box while it is in use")
+            return
         pid = spawn_keep_alive(endpoint, name, auth_provider=state.auth_provider,
                                config_path=state.config_path)
         rec = state.store.get(name)
@@ -161,7 +174,7 @@ def create_high_ram(state, SessionState, name, accelerator, shape_code):
         C.Client._build_assign_url = orig
 
     register(state, SessionState, name, res.endpoint, res.runtime_proxy_info.token,
-             res.runtime_proxy_info.url, accelerator.value, shape_code)
+             res.runtime_proxy_info.url, accelerator.value, shape_code, assignment=res)
     granted = "?"
     try:
         for a in state.client.list_assignments():
@@ -256,9 +269,9 @@ def main():
     # ---- 1. refresh our own registration, if the VM is still ours
     if mine and any(a.endpoint == mine.endpoint for a in live):
         a = next(a for a in live if a.endpoint == mine.endpoint)
-        state.client.keep_alive_assignment(mine.endpoint)
+        keep_alive(state.client, mine.endpoint)          # 0.6 only; 0.7 has no ping
         register(state, SessionState, args.name, a.endpoint, a.runtime_proxy_info.token,
-                 a.runtime_proxy_info.url, args.accelerator, attached_shape(a))
+                 a.runtime_proxy_info.url, args.accelerator, attached_shape(a), assignment=a)
         print("[restore] re-issued token for existing registration: %s" % describe(a))
         maybe_keepalive(state, args.name, a.endpoint, args.keepalive)
         endpoint, granted, created = a.endpoint, attached_shape(a), False
@@ -269,9 +282,9 @@ def main():
                  and getattr(getattr(a, "accelerator", None), "value", "") == args.accelerator]
         if adopt and not args.force_new:
             a = adopt[0]
-            state.client.keep_alive_assignment(a.endpoint)
+            keep_alive(state.client, a.endpoint)
             register(state, SessionState, args.name, a.endpoint, a.runtime_proxy_info.token,
-                     a.runtime_proxy_info.url, args.accelerator, attached_shape(a))
+                     a.runtime_proxy_info.url, args.accelerator, attached_shape(a), assignment=a)
             print("[restore] adopted orphaned assignment %s (no new VM, no new billing)"
                   % describe(a))
             maybe_keepalive(state, args.name, a.endpoint, args.keepalive)

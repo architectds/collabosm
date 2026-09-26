@@ -375,7 +375,7 @@ the first launch, and folded or not after that as the user leaves it:
 
 | step | when it is not done yet |
 |---|---|
-| Colab CLI | **Install** puts `google-colab-cli==0.6.0` in a venv of its own (`~/.collabosm/colab-cli`); it needs Python 3.12+ or `uv`, and says so when neither is here |
+| Colab CLI | **Install** puts `google-colab-cli==0.7.4` in a venv of its own (`~/.collabosm/colab-cli`); it needs Python 3.12+ or `uv`, and says so when neither is here |
 | Google account | **Connect Google account** opens Google's consent page in the browser; one Allow and the token is written where the CLI keeps it (`~/.config/colab-cli/token.json`) -- a CLI that is already signed in is simply found connected. A revoked or expired sign-in, or one without the Colab scope, asks to connect again |
 | compute units | the balance, read from Colab; none left says an A100 needs a paid plan |
 

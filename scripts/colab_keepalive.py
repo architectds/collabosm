@@ -9,7 +9,9 @@ their last kernel execution while chat went on -- the second although this
 script had sent the CLI's keep-alive ping every 3 minutes, the last one 40
 seconds before the box went (the CLI's history and the frontend's own record).
 Boxes whose kernel ran something at least every ~15 minutes lived for hours. So
-the ping alone does not hold a box. `--heartbeat` also runs scripts/heartbeat.py
+the ping alone does not hold a box -- and google-colab-cli 0.7 dropped it anyway
+("sessions stay alive as long as the kernel is active"), so it is sent only
+where the CLI still has it (scripts/colab_record.py). `--heartbeat` runs scripts/heartbeat.py
 on the box's kernel -- the use Colab counts -- which appends one line of the
 box's health (GPU, RAM, disk, model server, tunnel) to /content/heartbeat.jsonl
 and hands the same line back here.
@@ -50,6 +52,11 @@ for cand in glob.glob(os.path.expanduser(
         "~/.local/share/uv/tools/google-colab-cli/lib/python3*/site-packages")):
     if cand not in sys.path:
         sys.path.insert(0, cand)
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from colab_record import extra_fields, keep_alive  # noqa: E402 - beside this script
 
 HEARTBEAT_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heartbeat.py")
 HEARTBEAT_MARK = "HEARTBEAT_LINE "
@@ -165,7 +172,7 @@ def main(argv):
             print("KEEPALIVE_GONE")
             return 0
         if ping:
-            state.client.keep_alive_assignment(endpoint)
+            keep_alive(state.client, endpoint)      # 0.6 only: 0.7 has no ping, just the kernel
         a = live[endpoint]
         healed = ""
         if rec is None or rec.endpoint != endpoint:
@@ -177,18 +184,24 @@ def main(argv):
             state.store.add(SessionState(
                 name=name, token=a.runtime_proxy_info.token, url=a.runtime_proxy_info.url,
                 endpoint=endpoint, variant="GPU",
-                accelerator=getattr(a.accelerator, "value", str(a.accelerator))))
+                accelerator=getattr(a.accelerator, "value", str(a.accelerator)),
+                **extra_fields(SessionState, a)))
             try:
                 state.history.log_event(name, "session_registered",
                                         {"endpoint": endpoint, "by": "colab_keepalive"})
             except Exception:
                 pass
             healed = " reattached"
-        elif (rec.token, rec.url) != (a.runtime_proxy_info.token, a.runtime_proxy_info.url):
+        else:
             # the token the record was registered with runs out; the assignment's is
-            # current. The kernel and session ids stay: they are the VM's, not the token's.
-            rec.token, rec.url = a.runtime_proxy_info.token, a.runtime_proxy_info.url
-            state.store.add(rec)
+            # current (and 0.7 keeps its expiry too). The kernel and session ids stay:
+            # they are the VM's, not the token's.
+            fresh = dict(extra_fields(type(rec), a), token=a.runtime_proxy_info.token,
+                         url=a.runtime_proxy_info.url)
+            if any(getattr(rec, k, None) != v for k, v in fresh.items()):
+                for k, v in fresh.items():
+                    setattr(rec, k, v)
+                state.store.add(rec)
         print("KEEPALIVE ok %s%s" % (endpoint, healed), flush=True)
         if not beat:
             return 0
