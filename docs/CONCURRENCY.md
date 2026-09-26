@@ -175,7 +175,13 @@ needs `-rcs` in the tens of GB, which competes with `-ccs` for the same RAM.
   capacity answer, not a throughput answer.
 - **The serialisation lock is still in place.** `api_server.py` holds one Generator and one cache,
   so today "multiple streams" means *queued*, and a conversation-level swap scheduler does not
-  exist yet.
+  exist yet. What lifting it takes, from the ExLlamaV3 1.5.1 source: the Generator batches
+  continuously (`max_batch_size` 256), but a recurrent model's state slots are allocated at load by
+  the Cache from `-ambs` (`model_init` default **1**), so with the defaults the engine can hold one
+  live job whatever the Generator allows; and `enqueue`/`iterate`/`cancel` take no locks, so one
+  engine thread has to own the Generator and route `iterate()` results back to each request by
+  `r["job"]`. Then measure it here: `-ambs 4`, four concurrent requests, and the extra
+  `3 x 546 MiB` in `nvidia-smi`.
 - **Cheapest lever for more slots: `-ndt 2`.** Speculative depth is what makes each slot cost
   546 MiB; at `ndt 2` it is ~343 MiB. That trades decode speed for capacity.
 - **Vision has not been measured at these cache sizes**, and `-gcs 16384` is untested. At

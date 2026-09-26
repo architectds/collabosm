@@ -8,7 +8,7 @@ Operating notes for collabosm. Everything here is a thing that either bit us or 
 
 | shape | VRAM | RAM | CU/h | can it run this model? |
 |---|---:|---:|---:|---|
-| HIGH_RAM (`shape=hm`) | 79.3 GiB | 167 GB | 7.52 | **yes** |
+| HIGH_RAM (`shape=hm`) | 79.3 GiB | 167 GB | 6.77 (Colab's own rate; older notes: 7.52) | **yes** |
 | standard | ~39 GiB | 83 GB | 5.37 | **no** — about 63.6 GiB of weights must be VRAM-resident |
 
 It is not a coin flip in your favour: **eleven consecutive unpatched attempts returned the 40 GB
@@ -145,14 +145,24 @@ api_server.py on 127.0.0.1:8090  ->  cloudflared --url http://127.0.0.1:8090
 
 ## Cost guardrails
 
-- A100 High-RAM is **7.52 CU/h ≈ $0.75/h**. 200 CU ≈ **26.6 h/month**.
+- A100 High-RAM is **6.77 CU/h ≈ $0.68/h** as Colab itself reports it (`/tun/m/ccu-info` with the
+  box as the account's only assignment; older notes said 7.52). 200 CU ≈ **29.5 h/month**.
 - A model load is ~2-6 min (132 s warm page cache, 380 s cold) and the whole bootstrap ~11 min from
   nothing, so *reloading to change one flag* is the main waste. Batch experiments into one load: the
   generator chunk size and the CPU tier are both settable without reloading (chunk size is a Generator
   argument), while `-cs`, `-cq`, `-ndt` and `-ccs` are load-time.
-- Nothing in this kit starts a keep-alive daemon, on purpose. A keep-alive is what turns a 2 h session
-  into a 24 h one. Run `bash scripts/down.sh` when you stop working, and check `colab sessions`.
-- Colab idle-prunes an unattended VM after roughly 90 minutes; a long GPU run counts as activity.
+- **Colab does not see chat.** It counts two things as use: the notebook kernel (`colab exec`) and the
+  CLI's keep-alive ping. Requests through the Cloudflare tunnel are neither, so a box whose service was
+  up was reclaimed within 25 minutes of the last `colab exec` (2026-09-26: last exec 02:35:37 UTC,
+  assignment list empty at 03:00:05). The frontend therefore sends a keep-alive every 3 minutes
+  **while the box is in use** -- a chat inside the idle-stop window -- and never otherwise
+  (`scripts/colab_keepalive.py`, one `wsl.exe` call per ping). An idle box is left to the idle stop,
+  or to Colab.
+- No daemon, on purpose: a keep-alive that outlives the frontend is what turns a 2 h session into a
+  24 h one. (The CLI's own daemon from `colab new` lives in WSL anyway, and WSL shuts its VM down
+  seconds after the last `wsl.exe` exits, taking the daemon with it.) A box run by hand with no
+  frontend is reclaimed ~25 minutes after your last `colab exec`. Run `bash scripts/down.sh` when you
+  stop working, and check `colab sessions`.
 
 ## The frontend control plane (`frontend/control.py`)
 
@@ -183,8 +193,18 @@ time to learn:
   `down.sh` itself, and Stop stays available in `failed` as a manual retry.
 - **A session nobody closed.** If the frontend exits with a box up, the next one finds an open ledger
   entry, says so, and offers Stop (it runs `down.sh` and closes the entry). The entry is billed up to
-  its last heartbeat plus Colab's ~90 min idle prune, not up to "now", so a restart days later does not
-  charge a phantom month. New selections wait until it is closed.
+  its last heartbeat plus 90 minutes -- conservative: Colab reclaimed an unattended box within 25, but
+  its documented idle limit is ~90 -- not up to "now", so a restart days later does not charge a
+  phantom month. New selections wait until it is closed.
+- **`[?]` is still ours.** When the CLI drops its local record, `colab sessions` lists the box as
+  `[?] <endpoint>` -- and every `colab download -s collabosm` fails until the record is back. The
+  control plane remembers our endpoint, so it treats that line as ours instead of closing billing on
+  a live VM, and puts the record back from `list_assignments` (`colab_keepalive.py --no-ping`: nothing
+  is assigned, nothing is kept alive) before it reads the VM's files. A `colab sessions` that did not
+  answer at all is "unknown", never "no sessions".
+- **The rail offers exactly `recipes.json`.** A pick sends only the recipe id; `up.sh` resolves the
+  card, the model and every flag from the same file, and the confirm card says when a recipe has not
+  been run on its card yet or its rate is not one Colab reported.
 - **`up.sh` was never starting the model.** Nothing called `serve.sh`; the kit worked only because it
   was run by hand, and the rehearsal hid it by printing the lines only `serve.sh` writes. It is now
   chained after `bootstrap.sh` on the VM, and READY requires the published URL as well as `/health`
