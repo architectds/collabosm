@@ -5,3 +5,4 @@ bin/url.txt
 .env
 *.log
 .tmp/
+_dev_model/

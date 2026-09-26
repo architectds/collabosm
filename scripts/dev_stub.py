@@ -12,6 +12,9 @@ code path that ships.
     # with a think block, to exercise the reasoning item lifecycle
     python scripts/dev_stub.py --port 8099 --think
 
+    # a fixed list of model turns, played one per generation (scripts/check_codex.py)
+    python scripts/dev_stub.py --port 8099 --script turns.json
+
 Auth is disabled (COLLABOSM_NO_AUTH=1). Loopback only -- never expose this port.
 """
 from __future__ import annotations
@@ -119,9 +122,21 @@ SAMPLE = {"string": "stub", "integer": 1, "number": 1.5, "boolean": True,
           "array": ["stub"], "object": {}}
 
 
+# A command a real client may actually run: harmless, and its output recognisable.
+SAMPLE_COMMAND = "echo collabosm-tool-ok"
+
+
 def tool_call_for(prompt):
     """What this model writes when it calls a tool -- Qwen3-Coder XML -- aimed at the
-    first tool the rendered prompt offers, every required parameter filled."""
+    first tool the rendered prompt offers, every required parameter filled.
+
+    A turn whose last message is a tool's result gets an answer instead, quoting
+    that result: a real client (Codex) then sees one call, runs it, sends the output
+    back and gets a final reply -- a conversation, not a loop of calls."""
+    last_user = prompt.rfind("<|im_start|>user")
+    if last_user >= 0 and "<tool_response>" in prompt[last_user:]:
+        seen = prompt.rsplit("<tool_response>", 1)[1].split("</tool_response>", 1)[0].strip()
+        return "The tool answered: %s" % (seen.splitlines() or ["(nothing)"])[0][:200]
     i = prompt.find("<tools>\n")
     if i < 0:
         return None
@@ -138,19 +153,24 @@ def tool_call_for(prompt):
     for name in params.get("required") or list(props)[:1]:
         kind = (props.get(name) or {}).get("type", "string")
         value = SAMPLE.get(kind if isinstance(kind, str) else "string", "stub")
+        if name in ("command", "cmd") and kind == "string":
+            value = SAMPLE_COMMAND
         lines += ["<parameter=%s>" % name,
                   value if isinstance(value, str) else json.dumps(value), "</parameter>"]
     return "\n".join(lines + ["</function>", "</tool_call>"])
 
 
 def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=False,
-                   tool_call=False):
+                   tool_call=False, cut_call=False):
     plain = ("<think>%s</think>\n%s" % (thoughts, answer)) if think else answer
 
     def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None,
                           stops=None, embeddings=None):
         """Same contract as the shipping seam: yield raw text fragments."""
         call = tool_call_for(prompt) if tool_call else None
+        if call is not None and cut_call and "<tool_call>" in call:
+            # the token ceiling lands inside the call's first value
+            call = call[:call.index("<parameter=")] + "<parameter=command>\necho half-writ"
         text = plain if call is None else (
             ("<think>%s</think>\n%s" % (thoughts, call)) if think else call)
         _record({"prompt": prompt, "embeddings": len(embeddings or []),
@@ -169,7 +189,8 @@ def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=F
                 time.sleep(delay)
             yield text[i:i + chunk]
         api_server.LAST["new_tokens"] = len(text) // 4
-        api_server.LAST["eos_reason"] = "stop_token"
+        api_server.LAST["eos_reason"] = ("max_new_tokens" if call is not None and cut_call
+                                         and "<tool_call>" in call else "stop_token")
 
     def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None,
                            stops=None, embeddings=None):
@@ -184,10 +205,64 @@ def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=F
     api_server._engine_fragments = _engine_fragments
     api_server._generate_blocking = _generate_blocking
     api_server.STOP_IDS = []
+    raw = os.environ.get("STUB_RECORD_REQUESTS")
+    if raw:
+        # the request bodies a client really sends (what a replayed history holds)
+        orig = api_server.Handler._responses
+
+        def _responses(self, req):
+            try:
+                with open(raw, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(req, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            return orig(self, req)
+
+        api_server.Handler._responses = _responses
     if vision:
         api_server.VISION = _FakeVision()
         api_server.VISION_WANTED = True
         api_server.VISION_ERR = None
+
+
+def install_script(path, chunk, delay):
+    """Play a fixed list of model turns, one per generation, in order.
+
+    Each turn is the exact text a model writes after the prompt -- prose, a think
+    block's rest and its </think>, tool calls in whichever syntax -- plus why it
+    stopped: {"text": ..., "eos": "stop_token" | "max_new_tokens"}, or just the text.
+    A real client driving this sees those bytes go through the shipping parser, so a
+    test knows precisely which syntax each turn exercises. A generation past the
+    last turn answers "(script exhausted)", which a test can see.
+
+    With STUB_PROMPTS set, every rendered prompt is appended there as JSON lines
+    ({"turn", "prompt", "images"}): what the model would have been shown."""
+    with open(path, encoding="utf-8") as fh:
+        turns = [t if isinstance(t, dict) else {"text": t} for t in json.load(fh)]
+    played = [0]
+    prompts = os.environ.get("STUB_PROMPTS")
+
+    def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None,
+                          stops=None, embeddings=None):
+        n = played[0]
+        played[0] += 1
+        turn = turns[n] if n < len(turns) else {"text": "(script exhausted)"}
+        text = turn["text"]
+        if prompts:
+            with open(prompts, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"turn": n, "prompt": prompt,
+                                     "images": len(embeddings or [])}, ensure_ascii=False) + "\n")
+        api_server.LAST.clear()
+        api_server.LAST["prompt_tokens"] = len(prompt) // 4
+        for i in range(0, len(text), chunk):
+            if delay:
+                time.sleep(delay)
+            yield text[i:i + chunk]
+        api_server.LAST["new_tokens"] = max(1, len(text) // 4)
+        api_server.LAST["eos_reason"] = turn.get("eos") or "stop_token"
+
+    api_server._engine_fragments = _engine_fragments
+    api_server.STOP_IDS = []
 
 
 def main():
@@ -206,10 +281,16 @@ def main():
                     help="install a fake vision tower so image input can be tested")
     ap.add_argument("--tool-call", action="store_true",
                     help="when the request offers tools, answer with a call to the first one")
+    ap.add_argument("--cut-call", action="store_true",
+                    help="with --tool-call: the token ceiling lands inside the call")
+    ap.add_argument("--script", metavar="JSON",
+                    help="play these model turns in order, one per generation")
     a = ap.parse_args()
 
     install_engine(ANSWER, THOUGHTS, a.chunk, a.delay, a.think, a.silent, a.vision,
-                   a.tool_call)
+                   a.tool_call, a.cut_call)
+    if a.script:
+        install_script(a.script, a.chunk, a.delay)
     srv = ThreadingHTTPServer((a.host, a.port), api_server.Handler)
     print("[dev_stub] listening on http://%s:%d  (chunk=%d delay=%.3fs think=%s)"
           % (a.host, a.port, a.chunk, a.delay, a.think), flush=True)

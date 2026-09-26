@@ -632,8 +632,18 @@ def extract_images(req, embs):
         if not isinstance(items, list):
             continue
         for item in items:
-            if isinstance(item, dict) and isinstance(item.get("content"), list):
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("type")
+            # Messages only: a reasoning item's content is its thinking, replayed as
+            # such (flattening it here made the replay find a string and skip it).
+            if kind in (None, "message") and isinstance(item.get("content"), list):
                 item["content"] = flatten_parts(item["content"], embs)
+            # A tool's output can carry an image too (Codex's view_image): it goes to
+            # the model like any other image instead of vanishing from the tool result.
+            elif kind in ("function_call_output", "custom_tool_call_output") \
+                    and isinstance(item.get("output"), list):
+                item["output"] = flatten_parts(item["output"], embs)
 
 
 _TEMPLATE = {"src": None, "compiled": None}
@@ -981,27 +991,46 @@ def generate(prompt, max_tokens, temperature=None, top_p=None, stops=None,
 
 
 class _Delta:
-    """Turn a cumulative completion into ordered reasoning/content deltas.
+    """Turn a cumulative completion into ordered reasoning / content / tool deltas.
 
     Thinking is split on the LAST </think> exactly as the non-streaming path does,
     so a client that streams and a client that does not end up with the same
     answer. A fragment that would require retracting bytes already sent is dropped
     instead: an SSE stream cannot unsend.
+
+    With tools offered, the answer's text stops at the first <tool_call> and the
+    calls stream as ("tool", event, index, payload) -- see ToolStream -- the way
+    llama-server streams them: each call as soon as its name is written, then its
+    arguments as they are generated, not all at once when the answer is over (a long
+    call -- a whole file, a big patch -- used to leave the stream silent for minutes).
     """
 
-    def __init__(self, thinking_on=False, tools_on=False):
+    def __init__(self, thinking_on=False, kinds=None, parallel=True, raw_custom=True):
         self.thinking_on = thinking_on
-        self.tools_on = tools_on
+        self.tools = (ToolStream(kinds, parallel, raw_custom) if kinds else None)
         self.sent_reasoning = ""
         self.sent_content = ""
         self.content_started = False
 
-    def feed(self, accumulated, done=False):
+    def feed(self, accumulated, done=False, cut=False):
         reasoning, answer = split_thinking(accumulated, self.thinking_on)
-        if self.tools_on:
+        if not done and THINK_CLOSE not in accumulated:
+            # mid-thought: a tail that could be the start of </think> is not thinking
+            # yet -- with a tag split across fragments, its "<" used to go out as text --
+            # and neither is the whitespace before it, which the finished thought loses
+            # (streamed, it made the reasoning item a client replays end in "\n")
+            reasoning = reasoning[:len(reasoning) - _held_tail(reasoning, THINK_CLOSE)].rstrip()
+        calls = []
+        if self.tools is not None:
+            i = answer.find(TOOL_OPEN)
+            if i >= 0:
+                calls = self.tools.feed(answer[i:], final=done, cut=cut)
             # a tool call is not text: stop at it, and hold back what might be one
-            # (until the answer is done: then a trailing '<' is text)
+            # (until the answer is done: then a trailing '<' is text) -- and trailing
+            # whitespace, which the answer loses if a call follows it
             answer = before_tool_call(answer, done)
+            if not done and i < 0:
+                answer = answer.rstrip()
         out = []
         if (not self.content_started
                 and reasoning.startswith(self.sent_reasoning)
@@ -1013,6 +1042,7 @@ class _Delta:
                 self.content_started = True
             out.append(("content", answer[len(self.sent_content):]))
             self.sent_content = answer
+        out.extend(("tool",) + ev for ev in calls)
         return out
 
 
@@ -1027,13 +1057,6 @@ class _Delta:
 
 TOOL_OPEN = "<tool_call>"
 _FUNC_OPEN = re.compile(r"\s*<function=([^>\n]+)>")
-# A value ends at the first </parameter> that is followed by the next parameter, the
-# end of the function, the end of the call or the end of the text -- so a value that
-# itself contains "</tool_call>" or "</function>" (a patch to this very parser, a chat
-# template) is read whole instead of cutting the call short.
-_PARAM = re.compile(r"\s*<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>"
-                    r"(?=\s*(?:<parameter=|</function>|</tool_call>|\Z))", re.S)
-_FUNC_CLOSE = re.compile(r"\s*</function>")
 _CALL_CLOSE = re.compile(r"\s*</tool_call>")
 _JSON_BODY = re.compile(r"\s*(\{.*?\})\s*(?:</tool_call>|\Z)", re.S)
 
@@ -1057,30 +1080,49 @@ def _arguments_dict(args):
     return args if isinstance(args, dict) else {}
 
 
+def _tool_name(t):
+    fn = t["function"] if isinstance(t.get("function"), dict) else t
+    return fn.get("name") if t.get("type") == "function" else t.get("name")
+
+
 def request_tools(req):
-    """(tools in the template's chat-completions shape, name -> (kind, schema)).
+    """(tools in the template's chat-completions shape, name -> (kind, schema,
+    namespace, name the client knows)).
 
     Chat sends {"type": "function", "function": {...}}; Responses sends flat
-    function tools and Codex's freeform `custom` tools (apply_patch), which become
-    one-string-parameter functions here and go back out as custom_tool_call items.
-    Vendor-hosted tools (web_search, ...) cannot run here and are left out.
+    function tools, Codex's freeform `custom` tools (apply_patch) -- which become
+    one-string-parameter functions here and go back out as custom_tool_call items --
+    and `namespace` groups (Codex's multi_agent_v1), whose tools are offered to the
+    model as plain functions and go back out with their `namespace`; a name two
+    groups share is offered as "<namespace>__<name>". Vendor-hosted tools
+    (web_search, ...) cannot run here and are left out.
     """
     if req.get("tool_choice") == "none":
         return [], {}
-    tools, kinds = [], {}
+    flat = []
     for t in req.get("tools") or []:
         if not isinstance(t, dict):
             continue
+        if t.get("type") == "namespace" and isinstance(t.get("tools"), list):
+            flat += [(t.get("name"), sub) for sub in t["tools"] if isinstance(sub, dict)]
+        elif t.get("type") in ("function", "custom"):
+            flat.append((None, t))
+    seen = {}
+    for _ns, t in flat:
+        seen[_tool_name(t)] = seen.get(_tool_name(t), 0) + 1
+    tools, kinds = [], {}
+    for ns, t in flat:
+        real = _tool_name(t)
+        if not real:
+            continue
+        name = real if ns is None or seen[real] == 1 else "%s__%s" % (ns, real)
         if t.get("type") == "function":
             fn = t["function"] if isinstance(t.get("function"), dict) else t
-            name = fn.get("name")
-            if not name:
-                continue
             params = fn.get("parameters") or {"type": "object", "properties": {}}
             tools.append({"type": "function", "function": {
                 "name": name, "description": fn.get("description") or "", "parameters": params}})
-            kinds[name] = ("function", params)
-        elif t.get("type") == "custom" and t.get("name"):
+            kinds[name] = ("function", params, ns, real)
+        else:
             desc = t.get("description") or ""
             fmt = t.get("format") if isinstance(t.get("format"), dict) else {}
             if fmt.get("definition"):
@@ -1090,9 +1132,23 @@ def request_tools(req):
                       "properties": {"input": {"type": "string",
                                                "description": "the tool's raw input"}}}
             tools.append({"type": "function", "function": {
-                "name": t["name"], "description": desc, "parameters": params}})
-            kinds[t["name"]] = ("custom", params)
+                "name": name, "description": desc, "parameters": params}})
+            kinds[name] = ("custom", params, ns, real)
     return tools, kinds
+
+
+def _client_name(kinds, name):
+    """(the name the client knows, its namespace or None) for a name the model used."""
+    info = kinds.get(name) or ()
+    return (info[3] if len(info) > 3 else name), (info[2] if len(info) > 2 else None)
+
+
+def _model_name(kinds, name, namespace):
+    """The reverse: a call in the client's history, named as the model was shown it."""
+    for model, info in (kinds or {}).items():
+        if len(info) > 3 and info[3] == name and info[2] == namespace:
+            return model
+    return name
 
 
 def _schema_types(schema):
@@ -1107,20 +1163,185 @@ def _schema_types(schema):
     return out - {"null"}
 
 
+def _json_type(v):
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "boolean"
+    if isinstance(v, int):
+        return "integer"
+    if isinstance(v, float):
+        return "number"
+    return {str: "string", list: "array", dict: "object"}.get(type(v), "?")
+
+
+def _schema_all_types(schema):
+    """Like _schema_types, but keeping "null"."""
+    if not isinstance(schema, dict):
+        return set()
+    kinds = schema.get("type")
+    out = set(kinds) if isinstance(kinds, list) else ({kinds} if isinstance(kinds, str) else set())
+    for key in ("anyOf", "oneOf"):
+        for sub in schema.get(key) or []:
+            out |= _schema_all_types(sub)
+    return out
+
+
 def _typed(value, schema):
-    """A parameter's text as the JSON type its schema asks for -- or left as text
-    rather than invented, when it does not parse or a string is allowed."""
+    """A parameter's text as the JSON type its schema asks for, the way llama-server
+    reads Qwen3-Coder values: a string-only parameter is its raw text; a parameter
+    that cannot be a string is JSON; one that may be a string or something else is
+    JSON when it parses to a type the schema allows (`null` -> null) and raw text
+    otherwise ("1.0" for [string, null] stays "1.0")."""
     kinds = _schema_types(schema)
-    if "string" in kinds:
-        return value                       # "1.0" for anyOf[string, null] stays "1.0"
+    if _schema_all_types(schema) == {"string"}:
+        return value
     try:
         parsed = json.loads(value)
     except ValueError:
         low = value.strip().lower()
         return (low == "true") if "boolean" in kinds and low in ("true", "false") else value
+    if "string" in kinds:
+        allowed = _schema_all_types(schema)
+        got = _json_type(parsed)
+        fits = got in allowed or (got == "integer" and "number" in allowed)
+        return parsed if fits and got != "string" else value
     if kinds == {"integer"} and isinstance(parsed, float) and parsed.is_integer():
         parsed = int(parsed)
     return parsed
+
+
+_PARAM_OPEN = "<parameter="
+_PARAM_END = "</parameter>"
+_AFTER_PARAM = ("<parameter=", "</function>", "</tool_call>")
+_FUNC_END = "</function>"
+
+
+def _is_prefix_of_any(s, words):
+    return any(w.startswith(s) for w in words)
+
+
+def _held_tail(s, word):
+    """Length of the longest suffix of `s` that is a proper prefix of `word`."""
+    for k in range(min(len(s), len(word) - 1), 0, -1):
+        if s.endswith(word[:k]):
+            return k
+    return 0
+
+
+def _props_of(kinds, name):
+    spec = (kinds.get(name) or (None, {}))[1]
+    props = spec.get("properties") if isinstance(spec, dict) else None
+    return props if isinstance(props, dict) else {}
+
+
+def scan_tool_calls(text, kinds, final=False):
+    """Every tool call in `text` (the answer from its first <tool_call> on), finished
+    or still being written. One scanner for the stream and for the finished answer,
+    so what was streamed is always a prefix of what is finally sent.
+
+    Each call: {"name", "done", "pairs": [(key, typed value)] whose end is certain,
+    "open": (key, value so far) or None}. A value ends only at a </parameter> that
+    is followed by the next parameter, </function> or </tool_call> -- so a value that
+    contains any of those tags is read whole. While streaming, a </parameter> not yet
+    followed by anything decides nothing, and a tail of the value that could be the
+    start of "\\n</parameter>" is held back: a value never has to be taken back. The
+    older JSON body form is taken whole, once its </tool_call> (or the end) arrives.
+    """
+    calls, pos = [], 0
+    while True:
+        j = text.find(TOOL_OPEN, pos)
+        if j < 0:
+            break
+        pos = j + len(TOOL_OPEN)
+        m = _FUNC_OPEN.match(text, pos)
+        if not m:
+            b = _JSON_BODY.match(text, pos)
+            if b and (final or b.group(0).rstrip().endswith("</tool_call>")):
+                try:
+                    obj = json.loads(b.group(1))
+                except ValueError:
+                    obj = None
+                if isinstance(obj, dict) and obj.get("name"):
+                    calls.append({"name": obj["name"], "done": True, "open": None,
+                                  "pairs": list(_arguments_dict(obj.get("arguments")).items())})
+                pos = b.end()
+                continue
+            if final:
+                continue                     # not a call after all: look for the next
+            break                            # the function name is not written yet
+        call = {"name": m.group(1).strip(), "done": False, "pairs": [], "open": None}
+        calls.append(call)
+        props, pos = _props_of(kinds, call["name"]), m.end()
+        seen = set()
+        while True:
+            rest = text[pos:].lstrip()
+            ws = len(text) - pos - len(rest)
+            if rest.startswith(_FUNC_END):
+                call["done"] = True
+                pos += ws + len(_FUNC_END)
+                c = _CALL_CLOSE.match(text, pos)
+                if c:
+                    pos = c.end()
+                break
+            if not rest.startswith(_PARAM_OPEN):
+                if final:
+                    call["done"] = True      # ended without </function>: the model stopped
+                break                        # a tag still being written, or nothing yet
+            gt = rest.find(">")
+            if gt < 0:
+                break                        # the parameter's name is not written yet
+            key = rest[len(_PARAM_OPEN):gt].strip()
+            start = pos + ws + gt + 1
+            if text.startswith("\n", start):
+                start += 1
+            end, search, pending = None, start, None
+            while True:
+                k = text.find(_PARAM_END, search)
+                if k < 0:
+                    break
+                after = text[k + len(_PARAM_END):].lstrip()
+                if after.startswith(_AFTER_PARAM) or (final and not after):
+                    end = k
+                    break
+                if not after or _is_prefix_of_any(after, _AFTER_PARAM):
+                    pending = k               # decided by what comes next
+                    break
+                search = k + 1                # part of the value: keep looking
+            if end is None:
+                hold = pending if pending is not None else len(text)
+                held = text[start:hold]
+                hold -= max(_held_tail(held, "\n" + _PARAM_END), _held_tail(held, _PARAM_END))
+                if final:
+                    # the value never closed: the call ends here, without half an argument
+                    call["done"] = True
+                elif key not in seen:
+                    call["open"] = (key, text[start:max(start, hold)])
+                break
+            value = text[start:end]
+            if value.endswith("\n"):
+                value = value[:-1]
+            if key not in seen:               # a repeated key keeps its first value
+                seen.add(key)
+                call["pairs"].append((key, _typed(value, props.get(key))))
+            pos = end + len(_PARAM_END)
+    return calls
+
+
+def args_json(pairs, partial=False, open_=None):
+    """Arguments as the JSON string clients receive (compact, like OpenAI and
+    llama-server) -- or, while a call is streaming (partial=True), the prefix of it
+    that can no longer change: the closed parameters, then an open string value
+    (open_=(key, value so far)) without its closing quote, and no closing brace."""
+    parts = [json.dumps(k, ensure_ascii=False) + ":"
+             + json.dumps(v, ensure_ascii=False, separators=(",", ":")) for k, v in pairs]
+    if not partial:
+        return "{" + ",".join(parts) + "}"
+    head = "{" + ",".join(parts)
+    if open_ is not None:
+        head += ("," if parts else "") + json.dumps(open_[0], ensure_ascii=False) + ":\"" \
+            + json.dumps(open_[1], ensure_ascii=False)[1:-1]
+    return head
 
 
 def extract_tool_calls(text, kinds, cut=False):
@@ -1137,46 +1358,77 @@ def extract_tool_calls(text, kinds, cut=False):
     i = text.find(TOOL_OPEN) if kinds else -1
     if i < 0:
         return text, []
-    calls, pos = [], i
-    while True:
-        j = text.find(TOOL_OPEN, pos)
-        if j < 0:
-            break
-        pos = j + len(TOOL_OPEN)
-        m = _FUNC_OPEN.match(text, pos)
-        if m:
-            name = m.group(1).strip()
-            spec = (kinds.get(name) or (None, {}))[1]
-            props = (spec.get("properties") if isinstance(spec, dict) else None) or {}
-            args, pos = {}, m.end()
-            while True:
-                p = _PARAM.match(text, pos)
-                if not p:
-                    break
-                key = p.group(1).strip()
-                args[key] = _typed(p.group(2), props.get(key) if isinstance(props, dict) else None)
-                pos = p.end()
-            f = _FUNC_CLOSE.match(text, pos)
-            if f:
-                pos = f.end()
-            elif cut:
-                break                      # cut off inside this call: drop it
-            c = _CALL_CLOSE.match(text, pos)
-            if c:
-                pos = c.end()
-            calls.append({"name": name, "arguments": args})
-            continue
-        b = _JSON_BODY.match(text, pos)
-        if not b:
-            continue
-        try:
-            obj = json.loads(b.group(1))
-        except ValueError:
-            continue
-        if isinstance(obj, dict) and obj.get("name"):
-            calls.append({"name": obj["name"], "arguments": _arguments_dict(obj.get("arguments"))})
-        pos = b.end()
+    calls = []
+    for c in scan_tool_calls(text[i:], kinds, final=not cut):
+        if not c["done"]:
+            break                             # cut off inside this call: drop it
+        calls.append({"name": c["name"], "arguments": dict(c["pairs"])})
     return text[:i].rstrip(), calls
+
+
+def _streams_as_string(kinds, name, key):
+    kind = (kinds.get(name) or ("function",))[0]
+    return kind == "custom" or "string" in _schema_types(_props_of(kinds, name).get(key))
+
+
+class ToolStream:
+    """Tool calls as they are written: each call once its name is known, then its
+    arguments piece by piece, then done -- the pieces add up to exactly the final
+    arguments. Custom (freeform) tools stream their raw input instead of JSON when
+    raw_custom (the Responses API has them; Chat Completions only has functions).
+
+    feed() returns ("start", i, call) / ("args", i, piece) / ("done", i, call) events,
+    where call is {"name", "kind", "arguments" (dict), "text" (the JSON string, or
+    the raw input for a custom tool)}. With parallel=False, calls after the first are
+    not emitted: the client asked for one."""
+
+    def __init__(self, kinds, parallel=True, raw_custom=True):
+        self.kinds = kinds
+        self.parallel = parallel
+        self.raw_custom = raw_custom
+        self.sent = []                        # per call: {"name", "text", "done"}
+
+    def feed(self, text, final=False, cut=False):
+        out = []
+        calls = scan_tool_calls(text, self.kinds, final=final and not cut)
+        if not self.parallel:
+            calls = calls[:1]
+        for i, c in enumerate(calls):
+            kind = (self.kinds.get(c["name"]) or ("function",))[0]
+            if kind == "custom" and not self.raw_custom:
+                kind = "function"
+            if i >= len(self.sent):
+                self.sent.append({"name": c["name"], "text": "", "done": False})
+                out.append(("start", i, {"name": c["name"], "kind": kind}))
+            s = self.sent[i]
+            if s["done"]:
+                continue
+            args = dict(c["pairs"])
+            if kind == "custom":
+                if c["done"]:
+                    now = str(args.get("input", ""))
+                elif c["open"] and c["open"][0] == "input":
+                    now = c["open"][1]
+                else:
+                    now = s["text"]
+            else:
+                if c["done"]:
+                    now = args_json(c["pairs"])
+                else:
+                    # only a string value can stream mid-way: a number or an object is
+                    # typed when it closes, and appears whole
+                    streamable = bool(c["open"]) and _streams_as_string(self.kinds, c["name"],
+                                                                        c["open"][0])
+                    now = args_json(c["pairs"], partial=True,
+                                    open_=c["open"] if streamable else None)
+            if now.startswith(s["text"]) and len(now) > len(s["text"]):
+                out.append(("args", i, now[len(s["text"]):]))
+                s["text"] = now
+            if c["done"]:
+                s["done"] = True
+                out.append(("done", i, {"name": c["name"], "kind": kind, "arguments": args,
+                                        "text": now}))
+        return out
 
 
 def before_tool_call(answer, done=False):
@@ -1242,12 +1494,13 @@ def chat_messages(msgs):
     return template_roles(out)
 
 
-def responses_messages(req):
+def responses_messages(req, kinds=None):
     """Map a Responses-API request onto chat messages the template accepts.
 
     function_call / custom_tool_call items become the assistant's tool_calls and
     their outputs become `tool` messages -- before, both turned into empty user
-    turns, so the model never saw what its tools returned.
+    turns, so the model never saw what its tools returned. A call that carries a
+    `namespace` is named as the model was offered it (request_tools).
     """
     src = req.get("input")
     if src is None:
@@ -1255,6 +1508,9 @@ def responses_messages(req):
     msgs = []
 
     def assistant_turn():
+        # llama-server's merge rule: a reasoning item, a call or the assistant's text
+        # joins the assistant turn just before it, so one step of an agent loop --
+        # its thinking, its text, its calls -- is one assistant message again
         if msgs and msgs[-1]["role"] == "assistant":
             return msgs[-1]
         msgs.append({"role": "assistant", "content": ""})
@@ -1275,16 +1531,34 @@ def responses_messages(req):
                         else {"input": item.get("input") or ""})
                 assistant_turn().setdefault("tool_calls", []).append({
                     "id": item.get("call_id") or item.get("id"), "type": "function",
-                    "function": {"name": item.get("name") or "?",
+                    "function": {"name": _model_name(kinds, item.get("name") or "?",
+                                                     item.get("namespace")),
                                  "arguments": _arguments_dict(args)}})
             elif kind in ("function_call_output", "custom_tool_call_output"):
                 msgs.append({"role": "tool", "tool_call_id": item.get("call_id"),
                              "content": _text_of(item.get("output"))})
+            elif kind == "reasoning":
+                # The model's own thinking, handed back: the template puts it in front
+                # of that step's calls, so a multi-step turn keeps its chain of thought
+                # (llama-server does the same). Summary-only or encrypted items carry
+                # no text to replay and are skipped.
+                parts = item.get("content")
+                thought = (parts if isinstance(parts, str) else
+                           "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+                           if isinstance(parts, list) else "")
+                if thought.strip():
+                    turn = assistant_turn()
+                    turn["reasoning_content"] = (turn.get("reasoning_content") or "") + thought
             elif kind in (None, "message"):
                 c = item.get("content")
                 text = _text_of(c) if c is not None else (item.get("text") or "")
-                msgs.append({"role": item.get("role") or "user", "content": text})
-            # reasoning, and calls to vendor-hosted tools, are not replayed
+                role = item.get("role") or "user"
+                if role == "assistant" and msgs and msgs[-1]["role"] == "assistant" \
+                        and not msgs[-1].get("content") and not msgs[-1].get("tool_calls"):
+                    msgs[-1]["content"] = text       # its reasoning came just before it
+                else:
+                    msgs.append({"role": role, "content": text})
+            # calls to vendor-hosted tools (web_search, ...) are not replayed
     if isinstance(req.get("instructions"), str) and req["instructions"].strip():
         msgs.insert(0, {"role": "system", "content": req["instructions"]})
     msgs = template_roles(msgs)
@@ -1293,22 +1567,35 @@ def responses_messages(req):
     return msgs
 
 
+def call_item(name, kinds, status="completed", arguments=None, text=None):
+    """A Responses output item for one call: function_call (arguments as a JSON
+    string) or custom_tool_call (raw input), under the name -- and namespace -- the
+    client gave the tool."""
+    real, ns = _client_name(kinds, name)
+    call_id = "call_" + secrets.token_hex(12)
+    if (kinds.get(name) or ("function",))[0] == "custom":
+        item = {"type": "custom_tool_call", "id": "ctc_" + secrets.token_hex(12),
+                "call_id": call_id, "name": real, "status": status,
+                "input": text if text is not None else str((arguments or {}).get("input", ""))}
+    else:
+        item = {"type": "function_call", "id": "fc_" + secrets.token_hex(12),
+                "call_id": call_id, "name": real, "status": status,
+                "arguments": text if text is not None else args_json(list((arguments or {}).items()))}
+    if ns:
+        item["namespace"] = ns
+    return item
+
+
 def wire_calls(calls, kinds):
-    """Parsed calls -> (chat tool_calls, Responses output items), sharing call ids."""
+    """Parsed calls -> (chat tool_calls, Responses output items), sharing call ids.
+    Arguments are compact JSON strings, as OpenAI and llama-server send them."""
     chat, items = [], []
     for c in calls:
-        call_id = "call_" + secrets.token_hex(12)
-        args = json.dumps(c["arguments"], ensure_ascii=False)
-        chat.append({"id": call_id, "type": "function",
-                     "function": {"name": c["name"], "arguments": args}})
-        if (kinds.get(c["name"]) or ("function",))[0] == "custom":
-            items.append({"type": "custom_tool_call", "id": "ctc_" + secrets.token_hex(12),
-                          "call_id": call_id, "name": c["name"], "status": "completed",
-                          "input": str(c["arguments"].get("input", ""))})
-        else:
-            items.append({"type": "function_call", "id": "fc_" + secrets.token_hex(12),
-                          "call_id": call_id, "name": c["name"], "status": "completed",
-                          "arguments": args})
+        item = call_item(c["name"], kinds, arguments=c["arguments"])
+        chat.append({"id": item["call_id"], "type": "function",
+                     "function": {"name": c["name"],
+                                  "arguments": args_json(list(c["arguments"].items()))}})
+        items.append(item)
     return chat, items
 
 
@@ -1569,6 +1856,7 @@ class Handler(BaseHTTPRequestHandler):
 
         cid = "chatcmpl-%d" % int(time.time() * 1000)
         model = req.get("model", MODEL_ID)
+        parallel = req.get("parallel_tool_calls") is not False
 
         def finish_reason(r):
             return "length" if (r.get("eos_reason") or "") == "max_new_tokens" else "stop"
@@ -1610,6 +1898,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": {"message": repr(exc)}})
             reasoning, text = split_result(r, thinking_on)
             text, calls = extract_tool_calls(text, kinds, cut=truncated(r))
+            if not parallel:
+                calls = calls[:1]
             report(r)
             message = assistant_message(text, reasoning)
             if calls:
@@ -1632,21 +1922,39 @@ class Handler(BaseHTTPRequestHandler):
         # Genuinely incremental: text is forwarded while the engine decodes it,
         # rather than being chunked up after the completion is already finished.
         self._sse_start()
-        delta = _Delta(thinking_on, bool(kinds))
+        delta = _Delta(thinking_on, kinds, parallel, raw_custom=False)
         started = [False]
+        call_ids = {}                         # stream index -> call id
+        done_calls = []
 
         def emit(deltas):
-            for kind, piece in deltas:
+            for d in deltas:
                 if not started[0]:
                     self._sse_write("data: " + json.dumps(
                         chunk({"role": "assistant", "content": ""})) + "\n\n")
                     started[0] = True
-                if kind == "reasoning":
+                if d[0] == "reasoning":
                     self._sse_write("data: " + json.dumps(
-                        chunk({"reasoning_content": piece})) + "\n\n")
+                        chunk({"reasoning_content": d[1]})) + "\n\n")
+                elif d[0] == "content":
+                    self._sse_write("data: " + json.dumps(
+                        chunk({"content": d[1]})) + "\n\n")
                 else:
+                    # tool_calls deltas, the way llama-server and OpenAI stream them:
+                    # the call's first delta carries its id, type and name; the rest
+                    # carry argument pieces under the same index
+                    what, i, payload = d[1], d[2], d[3]
+                    if what == "start":
+                        call_ids[i] = "call_" + secrets.token_hex(12)
+                        tc = {"index": i, "id": call_ids[i], "type": "function",
+                              "function": {"name": payload["name"], "arguments": ""}}
+                    elif what == "args":
+                        tc = {"index": i, "function": {"arguments": payload}}
+                    else:
+                        done_calls.append(payload)
+                        continue
                     self._sse_write("data: " + json.dumps(
-                        chunk({"content": piece})) + "\n\n")
+                        chunk({"tool_calls": [tc]})) + "\n\n")
 
         try:
             r = collect(prompt, max_tokens, req.get("temperature"), req.get("top_p"),
@@ -1661,17 +1969,9 @@ class Handler(BaseHTTPRequestHandler):
             self._sse_write("data: " + json.dumps({"error": err}) + "\n\n")
             self._sse_write("data: [DONE]\n\n")
             return self._sse_end()
-        emit(delta.feed(r.get("text") or "", done=True))
+        emit(delta.feed(r.get("text") or "", done=True, cut=truncated(r)))
         report(r)
-        calls = extract_tool_calls(split_result(r, thinking_on)[1], kinds, cut=truncated(r))[1]
-        if calls:
-            if not started[0]:
-                self._sse_write("data: " + json.dumps(
-                    chunk({"role": "assistant", "content": None})) + "\n\n")
-            for n, call in enumerate(wire_calls(calls, kinds)[0]):
-                self._sse_write("data: " + json.dumps(
-                    chunk({"tool_calls": [dict(call, index=n)]})) + "\n\n")
-        final = chunk({}, "tool_calls" if calls and not truncated(r) else finish_reason(r))
+        final = chunk({}, "tool_calls" if done_calls and not truncated(r) else finish_reason(r))
         if r.get("timings"):
             # llama.cpp's field on the last chunk: the WebUI shows it under the
             # reply, and the frontend's rail reads it as it passes through.
@@ -1706,9 +2006,9 @@ class Handler(BaseHTTPRequestHandler):
         except MMUnavailable as exc:
             return self._send(400, {"error": {"message": str(exc),
                                               "type": "vision_unavailable"}})
-        msgs = responses_messages(req)
-        tkw = template_kwargs_from(req)
         tools, kinds = request_tools(req)
+        msgs = responses_messages(req, kinds)
+        tkw = template_kwargs_from(req)
         prompt, how = render_chat(msgs, tkw, tools)
         thinking_on = prompt_opens_think(prompt)
         max_tokens = int(req.get("max_output_tokens") or req.get("max_tokens")
@@ -1721,19 +2021,28 @@ class Handler(BaseHTTPRequestHandler):
         mid = "msg_%d" % (base + 1)
         rsn_id = "rs_%d" % (base + 2)
 
-        def payload_for(r, text, reasoning, calls=()):
+        parallel = req.get("parallel_tool_calls") is not False
+
+        def reasoning_item(status, text):
+            # The model's own thinking is the item's content (reasoning_text), as the
+            # Responses API carries raw reasoning -- not a summary, which it is not.
+            return {"id": rsn_id, "type": "reasoning", "status": status, "summary": [],
+                    "content": ([{"type": "reasoning_text", "text": text}] if text else [])}
+
+        def message_item(status, text):
+            return {"id": mid, "type": "message", "role": "assistant", "status": status,
+                    "content": ([{"type": "output_text", "text": text, "annotations": []}]
+                                if text else [])}
+
+        def payload_for(r, text, reasoning, calls=(), message=None):
             pt = r.get("prompt_tokens") or 0
             nt = r.get("new_tokens") or 0
             cut = truncated(r)
             output = []
             if reasoning:
-                output.append({"id": rsn_id, "type": "reasoning", "status": "completed",
-                               "summary": [{"type": "summary_text", "text": reasoning}]})
-            if text or not calls:
-                output.append({"id": mid, "type": "message", "role": "assistant",
-                               "status": "incomplete" if cut else "completed",
-                               "content": ([{"type": "output_text", "text": text,
-                                             "annotations": []}] if text else [])})
+                output.append(reasoning_item("completed", reasoning))
+            if message if message is not None else (text or not calls):
+                output.append(message_item("incomplete" if cut and not calls else "completed", text))
             output.extend(calls)
             return {
                 "id": rid,
@@ -1745,10 +2054,10 @@ class Handler(BaseHTTPRequestHandler):
                 "model": model,
                 "output": output,
                 "output_text": text,
-                "parallel_tool_calls": True,
-                "tool_calls": [],
-                "reasoning": ({"summary": [{"type": "summary_text", "text": reasoning}]}
-                              if reasoning else None),
+                "parallel_tool_calls": parallel,
+                "tool_choice": req.get("tool_choice") or "auto",
+                "reasoning": {"effort": tkw.get("reasoning_effort") if tkw.get("enable_thinking") else None,
+                              "summary": None},
                 "usage": {"input_tokens": pt, "output_tokens": nt,
                           "total_tokens": pt + nt,
                           "input_tokens_details": {"cached_tokens": r.get("cached_tokens") or 0},
@@ -1770,6 +2079,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": {"message": repr(exc)}})
             reasoning, text = split_result(r, thinking_on)
             text, calls = extract_tool_calls(text, kinds, cut=truncated(r))
+            if not parallel:
+                calls = calls[:1]
             items = wire_calls(calls, kinds)[1]
             print("[api] /v1/responses template=%s prompt=%s new=%s eos=%s calls=%s text=%r"
                   % (how, r.get("prompt_tokens"), r.get("new_tokens"),
@@ -1791,17 +2102,11 @@ class Handler(BaseHTTPRequestHandler):
         ev("response.created", {"response": rmeta})
         ev("response.in_progress", {"response": rmeta})
 
-        delta = _Delta(thinking_on, bool(kinds))
-        state = {"open": None, "idx": 0}
-
-        def reasoning_item(status, text):
-            return {"id": rsn_id, "type": "reasoning", "status": status,
-                    "summary": ([{"type": "summary_text", "text": text}] if text else [])}
-
-        def message_item(status, text):
-            return {"id": mid, "type": "message", "role": "assistant", "status": status,
-                    "content": ([{"type": "output_text", "text": text,
-                                  "annotations": []}] if text else [])}
+        delta = _Delta(thinking_on, kinds, parallel, raw_custom=True)
+        # open: the item being written; idx: the next output_index; msg: whether a
+        # message item went out; calls: stream index -> {"item", "oi"}
+        state = {"open": None, "idx": 0, "msg": False}
+        calls = {}
 
         def close_reasoning():
             if state["open"] != "reasoning":
@@ -1824,8 +2129,9 @@ class Handler(BaseHTTPRequestHandler):
                {"item_id": mid, "output_index": state["idx"], "content_index": 0,
                 "part": {"type": "output_text", "text": "", "annotations": []}})
             state["open"] = "message"
+            state["msg"] = True
 
-        def close_message(text):
+        def close_message(text, status="completed"):
             if state["open"] != "message":
                 return
             ev("response.output_text.done",
@@ -1835,13 +2141,53 @@ class Handler(BaseHTTPRequestHandler):
                {"item_id": mid, "output_index": state["idx"], "content_index": 0,
                 "part": {"type": "output_text", "text": text, "annotations": []}})
             ev("response.output_item.done",
-               {"output_index": state["idx"], "item": message_item("completed", text)})
+               {"output_index": state["idx"], "item": message_item(status, text)})
             state["open"] = None
+            state["idx"] += 1
+
+        def on_call(what, i, payload):
+            if what == "start":
+                # the text before a call is finished once the call begins
+                close_reasoning()
+                close_message(delta.sent_content)
+                item = call_item(payload["name"], kinds, status="in_progress", text="")
+                calls[i] = {"item": item, "oi": state["idx"]}
+                ev("response.output_item.added", {"output_index": state["idx"], "item": dict(item)})
+                state["idx"] += 1
+                return
+            c = calls[i]
+            item = c["item"]
+            custom = item["type"] == "custom_tool_call"
+            if what == "args":
+                if custom:
+                    item["input"] += payload
+                    ev("response.custom_tool_call_input.delta",
+                       {"item_id": item["id"], "call_id": item["call_id"],
+                        "output_index": c["oi"], "delta": payload})
+                else:
+                    item["arguments"] += payload
+                    ev("response.function_call_arguments.delta",
+                       {"item_id": item["id"], "output_index": c["oi"], "delta": payload})
+            elif what == "done":
+                if custom:
+                    item["input"] = payload["text"]
+                    ev("response.custom_tool_call_input.done",
+                       {"item_id": item["id"], "call_id": item["call_id"],
+                        "output_index": c["oi"], "input": item["input"]})
+                else:
+                    item["arguments"] = payload["text"]
+                    ev("response.function_call_arguments.done",
+                       {"item_id": item["id"], "output_index": c["oi"], "name": item["name"],
+                        "arguments": item["arguments"]})
+                item["status"] = "completed"
+                # the item a client acts on: a call that never reached this point (cut
+                # off by the token ceiling) is never handed over to be run
+                ev("response.output_item.done", {"output_index": c["oi"], "item": dict(item)})
 
         def emit(deltas):
-            for kind, piece in deltas:
-                if kind == "reasoning":
-                    if state["open"] is None:
+            for d in deltas:
+                if d[0] == "reasoning":
+                    if state["open"] is None and not state["msg"] and not calls:
                         ev("response.output_item.added",
                            {"output_index": state["idx"],
                             "item": reasoning_item("in_progress", "")})
@@ -1849,13 +2195,15 @@ class Handler(BaseHTTPRequestHandler):
                     if state["open"] == "reasoning":
                         ev("response.reasoning_text.delta",
                            {"item_id": rsn_id, "output_index": state["idx"],
-                            "content_index": 0, "delta": piece})
-                else:
+                            "content_index": 0, "delta": d[1]})
+                elif d[0] == "content":
                     close_reasoning()
                     open_message()
                     ev("response.output_text.delta",
                        {"item_id": mid, "output_index": state["idx"],
-                        "content_index": 0, "delta": piece})
+                        "content_index": 0, "delta": d[1]})
+                else:
+                    on_call(d[1], d[2], d[3])
 
         try:
             r = collect(prompt, max_tokens, req.get("temperature"), req.get("top_p"),
@@ -1871,44 +2219,28 @@ class Handler(BaseHTTPRequestHandler):
                           "message": str(exc) if too_long else repr(exc)}}})
             return self._sse_end()
 
-        final = r.get("text") or ""
+        cut = truncated(r)
         reasoning, text = split_result(r, thinking_on)
-        text, calls = extract_tool_calls(text, kinds, cut=truncated(r))
-        items = wire_calls(calls, kinds)[1]
-        emit(delta.feed(final, done=True))
+        text = extract_tool_calls(text, kinds, cut=cut)[0]
+        emit(delta.feed(r.get("text") or "", done=True, cut=cut))
         close_reasoning()
-        if text or not items or state["open"] == "message":
-            open_message()
-            close_message(text)
-            state["idx"] += 1
+        if state["open"] == "message":
+            close_message(text, "incomplete" if cut and not calls else "completed")
+        elif not state["msg"] and not calls:
+            open_message()                      # a turn with nothing in it still answers
+            close_message(text, "incomplete" if cut else "completed")
+        items = [c["item"] for _, c in sorted(calls.items(), key=lambda kv: kv[1]["oi"])]
         for item in items:
-            # Codex binds a call's argument deltas to an item it was told about, so
-            # every call gets the whole lifecycle, ids matching the terminal event.
-            pending = dict(item, status="in_progress")
-            if item["type"] == "custom_tool_call":
-                pending["input"] = ""
-                ev("response.output_item.added", {"output_index": state["idx"], "item": pending})
-                ev("response.custom_tool_call_input.delta",
-                   {"item_id": item["id"], "output_index": state["idx"], "delta": item["input"]})
-                ev("response.custom_tool_call_input.done",
-                   {"item_id": item["id"], "output_index": state["idx"], "input": item["input"]})
-            else:
-                pending["arguments"] = ""
-                ev("response.output_item.added", {"output_index": state["idx"], "item": pending})
-                ev("response.function_call_arguments.delta",
-                   {"item_id": item["id"], "output_index": state["idx"],
-                    "delta": item["arguments"]})
-                ev("response.function_call_arguments.done",
-                   {"item_id": item["id"], "output_index": state["idx"],
-                    "arguments": item["arguments"]})
-            ev("response.output_item.done", {"output_index": state["idx"], "item": item})
-            state["idx"] += 1
-        print("[api] /v1/responses template=%s prompt=%s new=%s calls=%s"
+            if item["status"] != "completed":
+                item["status"] = "incomplete"   # cut off while it was being written
+        print("[api] /v1/responses template=%s prompt=%s new=%s calls=%s%s"
               % (how, r.get("prompt_tokens"), r.get("new_tokens"),
-                 [c["name"] for c in calls]), flush=True)
-        ev("response.completed", {"response": payload_for(r, text, reasoning, items)})
+                 [i.get("name") for i in items], " (cut)" if cut else ""), flush=True)
+        # The terminal event says what the response is: a turn cut off by the token
+        # ceiling ends in response.incomplete, as the Responses API defines it.
+        ev("response.incomplete" if cut else "response.completed",
+           {"response": payload_for(r, text, reasoning, items, message=state["msg"])})
         self._sse_end()
-
 
 def main():
     ap = argparse.ArgumentParser()
