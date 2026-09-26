@@ -14,6 +14,7 @@ Routes
     /control/cancel         forget a pending confirmation
     /control/stop           stop the VM now (the point of the whole kit)
     /control/couple         find the running service on our session and attach to it
+    /control/key            the VM's key, for the rail's copy button (never in /control/status)
     /control/colab/<act>    the Colab guide: install | connect | cancel | check | disconnect
     /v1/*  /props  /slots  /tools  /models/*  /cors-proxy
                             proxied to the tunnel (key injected), or in a rehearsal to --backend,
@@ -360,6 +361,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, CONTROL.cancel())
         if path == "/control/stop":
             return self._json(200, CONTROL.stop("manual"))
+        if path == "/control/key":
+            # only on a click, only same-origin JSON (the POST guard above): a foreign page
+            # can neither send this nor read the answer
+            res = CONTROL.reveal_key()
+            return self._json(200 if res.get("ok") else 409, res)
         if path == "/control/couple":
             # WSL round trips take tens of seconds: answer now, let the rail watch
             threading.Thread(target=CONTROL.couple, args=("manual",), daemon=True).start()
@@ -441,8 +447,8 @@ def main() -> int:
                                fake_colab=os.environ.get("COLLABOSM_FAKE_COLAB"))
     mode = ("mock (nothing billed, nothing written)" if ARGS.mock
             else "rehearsal" if ARGS.fake_provision else "colab")
-    print("[fe] control    %s -> wsl -d %s (idle stop %d min, budget %.0f CU)"
-          % (mode, ARGS.wsl_distro, ARGS.idle_stop_min, ARGS.budget_cu), flush=True)
+    print("[fe] control    %s (idle stop %d min, budget %.0f CU)"
+          % (mode, ARGS.idle_stop_min, ARGS.budget_cu), flush=True)
     if ARGS.external_endpoint:
         print("[fe] external   %s (nothing billed, nothing auto-stopped)"
               % ARGS.external_endpoint, flush=True)
@@ -450,7 +456,7 @@ def main() -> int:
         print("!! upstream/index.html missing -- the vendored WebUI build is not here",
               file=sys.stderr)
         return 2
-    print("[fe] shell      http://%s:%d/" % (ARGS.host, ARGS.port), flush=True)
+    print("[fe] shell      http://%s:%d/   <- open this in your browser" % (ARGS.host, ARGS.port), flush=True)
     print("[fe] webui      http://%s:%d/?embed=1" % (ARGS.host, ARGS.port), flush=True)
     if ARGS.backend:
         print("[fe] backend    %s (rehearsal chat)" % ARGS.backend, flush=True)

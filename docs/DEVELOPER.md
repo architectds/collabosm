@@ -426,7 +426,9 @@ Both dialects stream through it line by line -- `/v1/responses` and `/v1/chat/co
 
 **Why a local proxy instead of pointing a client straight at the endpoint**
 
-- the bearer key stays in this process and is never handed to a browser,
+- the bearer key stays in this process and is never handed to a browser -- until someone presses
+  the rail's key button (to reach the GPU from another device): `POST /control/key` fetches it on
+  that click, same-origin JSON only, and `/control/status`, polled every 1.5 s, never carries it,
 - the tunnel's hostname changes with every VM, and this address does not,
 - the page is same-origin with the proxy, so there is no CORS surface at all.
 

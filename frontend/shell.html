@@ -414,13 +414,16 @@ const I18N = {
     'tip.hold.err': 'Keep-alive failed: {err}',
     'tip.hold.gone': 'Colab lists no assignment for this session.',
     'tip.hold.pending': 'The first keep-alive is on its way.',
-    'tip.key.held': 'API key: held by the proxy, never sent to the browser',
+    'tip.key.held': 'API key of this GPU — click to copy. The chat here never needs it: this app adds it to every request on the way to the GPU, so the page never holds it. Copy it only to connect from another device, together with the address beside it.',
+    'copied.key': 'API key copied. With the address, anyone can use this GPU — and your compute units — until you stop it.',
+    'copied.key.fail': 'Could not copy the key: this browser refused the clipboard.',
+    'code.no_key': 'No key yet: the GPU is not ready.',
     'tip.key.pending': 'API key: reading it from the VM…',
     'tip.key.none': 'API key: not read — chat will be refused',
     'attached.body': 'We did not start it, so it is never billed or auto-stopped. Restart the frontend without --external-endpoint to request your own card.',
     'btn.couple': 'Reconnect', 'btn.adopt': 'Take over the running VM',
     'btn.go': 'Start — billing begins', 'btn.cancel': 'Cancel',
-    'sec.machine': 'Machine', 'machine.server': 'server', 'machine.local': 'this PC',
+    'sec.machine': 'Machine', 'machine.server': 'server', 'machine.local': 'this computer',
     'tip.msrc.server': 'Reported by the model server through the tunnel · probed {ago} ago',
     'tip.msrc.local': 'This PC (the endpoint runs here) · probed {ago} ago',
     'tip.vram': 'GPU memory: used / total', 'tip.ram': 'Host RAM: used / total', 'tip.disk': 'Disk: free / total',
@@ -480,7 +483,7 @@ const I18N = {
     'colab.step.account': 'Google account',
     'colab.step.cu': 'Compute units',
     'colab.cli.checking': 'Looking for the Colab CLI…',
-    'colab.cli.missing': 'Google’s official command-line tool; collabosm reaches your Colab through it. It installs into collabosm’s own folder and changes nothing else on this PC.',
+    'colab.cli.missing': 'Google’s official command-line tool; collabosm reaches your Colab through it. It installs into collabosm’s own folder and changes nothing else on this computer.',
     'colab.cli.broken': 'Found, but it does not start: {why}. Installing again repairs it.',
     'colab.cli.installing': 'Installing google-colab-cli…',
     'colab.cli.failed': 'The install stopped at {step} (exit {rc}).',
@@ -488,7 +491,7 @@ const I18N = {
     'colab.cli.ok': '{version} · {where}',
     'colab.where.native': 'this computer',
     'colab.where.wsl': 'WSL {distro}',
-    'colab.account.signed_out': 'Sign in with Google and allow access once. The token stays on this PC.',
+    'colab.account.signed_out': 'Sign in with Google and allow access once. The token stays on this computer.',
     'colab.account.authorizing': 'Allow access in the browser tab that just opened…',
     'colab.account.link': 'No tab? Open the sign-in page',
     'colab.account.expired': 'This sign-in no longer works: {why}.',
@@ -514,8 +517,8 @@ const I18N = {
     'btn.colab.check': 'Check again',
     'btn.colab.disconnect': 'Disconnect',
     'btn.colab.python': 'Get Python',
-    'tip.colab.disconnect': 'Revoke the sign-in at Google and delete the token from this PC. The Colab CLI shares it.',
-    'colab.disconnect.confirm': 'Disconnect this Google account from collabosm? The Colab CLI on this PC is signed out too.',
+    'tip.colab.disconnect': 'Revoke the sign-in at Google and delete the token from this computer. The Colab CLI shares it.',
+    'colab.disconnect.confirm': 'Disconnect this Google account from collabosm? The Colab CLI on this computer is signed out too.',
     'gpus.need_colab': 'Finish the Colab section above to start a card.',
     'session.ours': 'ours',
     'det.command': 'Command it runs', 'det.command.none': 'Generated when you first start a recipe.',
@@ -632,7 +635,10 @@ const I18N = {
     'tip.hold.err': '保活失败：{err}',
     'tip.hold.gone': 'Colab 上已经没有这个会话的分配。',
     'tip.hold.pending': '第一次保活马上发出。',
-    'tip.key.held': 'API 密钥：由代理持有，从不发给浏览器',
+    'tip.key.held': '这台 GPU 的 API 密钥——点击复制。这里的聊天用不到它：本应用在把每个请求转发给 GPU 时自己加上密钥，所以网页里从不保存它。只有要从别的设备连接时才需要复制它，和旁边的地址一起用。',
+    'copied.key': 'API 密钥已复制。拿到地址和密钥的人都能使用这台 GPU（花你的计算单元），直到你停机。',
+    'copied.key.fail': '复制失败：浏览器拒绝访问剪贴板。',
+    'code.no_key': '还没有密钥：GPU 尚未就绪。',
     'tip.key.pending': 'API 密钥：正在从 VM 读取…',
     'tip.key.none': 'API 密钥：没读到——对话会被拒绝',
     'attached.body': '这个端点不是我们启动的，所以既不计费，也不会被自动停机。要申请自己的卡，就不带 --external-endpoint 重启前端。',
@@ -849,7 +855,10 @@ const I18N = {
     'tip.hold.err': 'キープアライブ失敗：{err}',
     'tip.hold.gone': 'Colab にこのセッションの割り当てがありません。',
     'tip.hold.pending': '最初のキープアライブをまもなく送信します。',
-    'tip.key.held': 'API キー：プロキシが保持し、ブラウザーには送りません',
+    'tip.key.held': 'この GPU の API キー — クリックでコピー。ここのチャットには不要です。このアプリが GPU へ送る各リクエストに自分で付けるので、ページがキーを持つことはありません。別の端末から接続するときだけ、隣のアドレスと一緒にコピーしてください。',
+    'copied.key': 'API キーをコピーしました。アドレスとキーがあれば、停止するまで誰でもこの GPU（とあなたのコンピューティング ユニット）を使えます。',
+    'copied.key.fail': 'キーをコピーできませんでした。ブラウザーがクリップボードへのアクセスを拒否しました。',
+    'code.no_key': 'まだキーがありません。GPU の準備ができていません。',
     'tip.key.pending': 'API キー：VM から読み込み中…',
     'tip.key.none': 'API キー：未取得——チャットは拒否されます',
     'attached.body': 'このエンドポイントは私たちが起動したものではないため、課金も自動停止もしません。自分のカードを使うには --external-endpoint を付けずにフロントエンドを再起動してください。',
@@ -915,7 +924,7 @@ const I18N = {
     'colab.step.account': 'Google アカウント',
     'colab.step.cu': 'コンピューティング ユニット',
     'colab.cli.checking': 'Colab CLI を探しています…',
-    'colab.cli.missing': 'Google 公式のコマンドラインツールです。collabosm はこれを通じて Colab に接続します。collabosm 専用のフォルダーにインストールされ、この PC のほかの部分は変更しません。',
+    'colab.cli.missing': 'Google 公式のコマンドラインツールです。collabosm はこれを通じて Colab に接続します。collabosm 専用のフォルダーにインストールされ、このコンピューター のほかの部分は変更しません。',
     'colab.cli.broken': '見つかりましたが起動できません：{why}。再インストールで直ります。',
     'colab.cli.installing': 'google-colab-cli をインストールしています…',
     'colab.cli.failed': 'インストールが {step} で止まりました（終了コード {rc}）。',
@@ -923,7 +932,7 @@ const I18N = {
     'colab.cli.ok': '{version} · {where}',
     'colab.where.native': 'このコンピューター',
     'colab.where.wsl': 'WSL {distro}',
-    'colab.account.signed_out': 'Google でログインし、一度だけアクセスを許可してください。トークンはこの PC にだけ保存されます。',
+    'colab.account.signed_out': 'Google でログインし、一度だけアクセスを許可してください。トークンはこのコンピューター にだけ保存されます。',
     'colab.account.authorizing': '開いたブラウザーのタブで「許可」を押してください…',
     'colab.account.link': 'タブが開かない場合はログインページを開く',
     'colab.account.expired': 'このログインは使えなくなっています：{why}。',
@@ -949,8 +958,8 @@ const I18N = {
     'btn.colab.check': 'もう一度確認',
     'btn.colab.disconnect': '切断',
     'btn.colab.python': 'Python を入手',
-    'tip.colab.disconnect': 'Google でこのログインを取り消し、この PC のトークンを削除します（Colab CLI も共有しています）。',
-    'colab.disconnect.confirm': 'この Google アカウントを collabosm から切断しますか？この PC の Colab CLI もログアウトします。',
+    'tip.colab.disconnect': 'Google でこのログインを取り消し、このコンピューター のトークンを削除します（Colab CLI も共有しています）。',
+    'colab.disconnect.confirm': 'この Google アカウントを collabosm から切断しますか？このコンピューター の Colab CLI もログアウトします。',
     'gpus.need_colab': '上の Colab セクションを完了するとカードを起動できます。',
     'session.ours': '自分の',
     'det.command': '実行するコマンド', 'det.command.none': '最初にレシピを起動すると生成されます。',
@@ -1039,7 +1048,7 @@ const HTML_LANG = { en: 'en', zh: 'zh-CN', ja: 'ja' };
 const LOCALE = { en: 'en-US', zh: 'zh-CN', ja: 'ja-JP' };
 const STEPS = ['requesting', 'uploading', 'bootstrapping', 'loading', 'ready'];
 const BUSY = ['requesting', 'uploading', 'bootstrapping', 'loading', 'stopping'];
-const QUIET = ['confirm_required', 'started', 'cancelled', 'stopping', 'coupling',
+const QUIET = ['confirm_required', 'started', 'cancelled', 'stopping', 'coupling', 'key',
                'colab_installing', 'colab_authorizing', 'colab_checking', 'colab_cancelled'];
 // the recipe facts a card shows, in this order (the registry may carry more)
 const FACT_ORDER = ['prefill_tps', 'decode_tps', 'context', 'vision', 'concurrency', 'vram_mib', 'weights', 'eta_min'];
@@ -1457,7 +1466,8 @@ function sessionChips() {
     h += chip('hourglass', 'idle', st.idle_policy === 'off' ? 'off' : '')
       + chip('clock', 'uptime')
       + chip(K.holding ? 'shield' : 'shieldoff', 'hold', 'only' + (K.holding ? (K.ok === false ? ' alert' : '') : ' off'))
-      + chip('key', 'key', 'only' + (ep.key ? '' : ' off'));
+      + '<button type="button" class="chip only' + (ep.key ? '' : ' off') + '" data-act="copykey" data-t="key"'
+      + (ep.key ? '' : ' disabled') + '>' + ico('key') + '</button>';
   }
   return h + '</div>';
 }
@@ -1861,6 +1871,28 @@ document.addEventListener('click', async (e) => {
     saveJSON('collabosm.folds', folds);
     hideTip();
     return render();
+  }
+  if (act === 'copykey') {
+    // Fetched on this click, never kept by the page: /control/status does not carry it.
+    // A POST, so a foreign page can neither send this nor read the answer.
+    let r = null;
+    try {
+      const res = await fetch('/control/key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      r = await res.json();
+    } catch (err) { r = { code: 'error', err: String(err) }; }
+    if (!r || !r.key) return say(r);
+    let done = false;
+    try { await navigator.clipboard.writeText(r.key); done = true; } catch (err) { done = false; }
+    if (!done) {
+      const area = document.createElement('textarea');     // older clipboard path, nothing shown
+      area.value = r.key;
+      area.style.position = 'fixed'; area.style.opacity = '0';
+      document.body.appendChild(area); area.select();
+      try { done = document.execCommand('copy'); } catch (err) { done = false; }
+      area.remove();
+    }
+    toast(t(done ? 'copied.key' : 'copied.key.fail'));
+    return;
   }
   if (act === 'copy') {
     const url = st && st.endpoint && st.endpoint.base;

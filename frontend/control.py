@@ -732,6 +732,19 @@ class Control:
     def api_key(self):
         return self.state["endpoint"].get("key")
 
+    def reveal_key(self) -> dict:
+        """The VM's key, for the person who pressed the rail's key button: to reach
+        this GPU from another device, beside the tunnel address. Never part of
+        status(), which the page polls every 1.5 s -- a key has no business sitting in
+        a response nobody asked for -- and the chat here never needs it, since the
+        proxy adds it to every request on the way out."""
+        with self.lock:
+            stage = self.state["stage"]
+            ep = dict(self.state["endpoint"])
+        if stage not in ("ready", "attached") or not ep.get("key"):
+            return {"ok": False, "code": "no_key"}
+        return {"ok": True, "code": "key", "key": ep["key"], "base": ep.get("base")}
+
     def server_info(self):
         with self.lock:
             return self.state.get("server")
