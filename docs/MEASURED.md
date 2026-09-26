@@ -80,7 +80,9 @@ between to force the first one's pages out of VRAM:
 | A once more | 32,026 | 32,000 | 99.9% | — | 0.39 s | 209 | 209 | 104 |
 
 `alloc_tier_pages = 104` is the proof it came from host RAM and not from a surviving VRAM page: the
-engine counts restores separately from VRAM hits. **27x faster to restore than to re-prefill.**
+engine counts restores separately from VRAM hits. Against the fair baseline -- the 9.72 s re-prefill
+of the `-ccs 0` control below -- the restore is **16.8x faster**. (Against the 15.62 s cold row it
+reads 27x, but that row also paid the one-time kernel autotune.)
 
 **Control: the identical sequence with `-ccs 0`.** Same prompts, same eviction pressure (104 live
 pages evicted in both runs), only the tier differing:
@@ -151,6 +153,7 @@ Two facts about the served model that cost real time to find:
 
 - **It is a reasoning model with thinking on by default.** A `max_tokens` under ~1K returns a
   truncated reasoning trace rather than an answer; this looks like a broken server and is not one.
+  (`api_server.py` has since turned thinking off unless a request asks for it.)
 - **`Generator.generate()` returns `(completions, last_results)`.** Reading `text` out of
   `last_results` yields only the *final fragment* of the completion, so an early `api_server.py`
   answered `" inputs"` to a real question. The server now unpacks the tuple and asks for

@@ -53,7 +53,8 @@
     "decode_tps_no_mtp": 56.0,
     "gcs_sweep_prefill_tps": {"1024": 2204, "2048": 2806, "4096": 3360, "8192": 3882},
     "kv_bytes_per_token": 10752,
-    "warm_cache_restore": {"cold_s": 15.62, "restored_s": 0.58, "speedup": 27, "pages_restored": 104}
+    "warm_cache_restore": {"cold_s": 15.62, "reprefill_s": 9.72, "restored_s": 0.58, "speedup": 16.8, "pages_restored": 104,
+                           "note": "speedup is against the -ccs 0 re-prefill; cold_s also paid the one-time kernel autotune"}
   },
   "live_endpoint_verified": {
     "date": "2026-09-25",
@@ -68,7 +69,7 @@
       "v1_models_200_with_key": true,
       "real_completion_seconds": 3.1
     },
-    "note": "api_server.py enforces the bearer key from /content/api-key.txt. The served model is a reasoning model with thinking on by default: max_tokens below ~1K returns a truncated reasoning trace, not an answer. The tunnel is a Cloudflare quick tunnel, so the hostname is ephemeral."
+    "note": "api_server.py enforces the bearer key from /content/api-key.txt. The pack's template has thinking on by default (max_tokens below ~1K then returns a truncated reasoning trace); api_server.py now sends enable_thinking=false unless a request asks for thinking. The tunnel is a Cloudflare quick tunnel, so the hostname is ephemeral."
   },
   "capacity": {
     "source": "docs/CONCURRENCY.md",

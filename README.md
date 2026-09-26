@@ -15,7 +15,7 @@ Measured on the box this repo was built against:
 | decode, MTP `ndt=4`, 114K context | **90.1 t/s** |
 | decode, no MTP | 56 t/s |
 | KV cache | 10,752 B/token (2.63 GiB at 262K, 5.01 GiB at 500K) |
-| resume a fully-evicted 32K conversation | **0.58 s** instead of 15.62 s |
+| resume a fully-evicted 32K conversation | **0.58 s** instead of a 9.72 s re-prefill (16.8x) |
 | cost | 7.52 CU/h (A100 High-RAM) ≈ $0.75/h, ≈26.6 h per 200 CU |
 
 ExLlamaV3 is the only engine in this repo. See `docs/MEASURED.md` for provenance and caveats, and
@@ -52,10 +52,17 @@ SESSION=mybox CACHE_SIZE=524288 CPU_CACHE_GB=8 bash scripts/up.sh
 | `CACHE_QUANT` | `4` | KV bits (`4` = Q4, `2`-`8` allowed) |
 | `CPU_CACHE_GB` | `32` | **pinned-RAM second-tier KV page cache** (0 = off). Sized at 92K tokens/GB; do not treat it as free - it is allocated as pinned memory in full (32 + 24 = ~56 GB next to a 36.4 GiB n-gram table) |
 | `RECURRENT_CACHE_GB` | `24` | host-RAM store for Gated-DeltaNet checkpoints (~2048-token interval, 116 MB each) |
-| `GCS` | `4096` | generator chunk size — the biggest prefill lever we found |
+| `GCS` | `8192` | generator chunk size — the biggest prefill lever we found |
 | `NDT` | `4` | MTP draft depth |
 | `RUNTIME` | `wheel` | `wheel` (prebuilt, no compile) or `source` |
 | `TUNNEL_TOKEN` | unset | named-tunnel token: gives a **stable hostname** instead of a quick tunnel. Pair with `PUBLIC_URL` for the URL shown in status |
+
+These defaults have not yet been loaded together: the verified load in `docs/MEASURED.md` ran
+`-gcs 4096 -ccs 16 -rcs 16`. `GET /v1/status` reports what a running server actually got.
+
+`up.sh` exits `0` on READY — a healthy API **and** a published tunnel URL — and otherwise with
+`1` (upload/bootstrap), `2`-`6` (from `restore.py`), `7` (timed out), `8` (`serve.sh` failed) or
+`9` (healthy on the VM, but no tunnel URL).
 
 ## What is in here
 
@@ -243,9 +250,13 @@ Anything else returns a JSON 404 that says so.
 - the UI can be updated independently of the VM.
 
 There is deliberately **no** `Access-Control-Allow-Origin: *` here: a wildcard on a proxy that
-injects a bearer key would let any web page you happen to visit spend your GPU through it. Server-side
-UIs do not need it (they call upstream from their own backend); if a browser-hosted UI ever does,
-add an explicit origin allowlist, not a wildcard.
+injects a bearer key would let any web page you happen to visit read what your GPU says. That alone
+does not stop a page from *sending* a `text/plain` or form POST, though — those need no preflight —
+so every POST must also be `application/json`, come from this origin (or from no browser at all), and
+name this proxy in `Host`, which shuts out DNS rebinding too. `frontend/server.py` applies the same
+rule to `/control/*`, where a POST can start billing. Server-side UIs are unaffected (they call
+upstream from their own backend); if a browser-hosted UI ever needs in, add an explicit origin
+allowlist, not a wildcard.
 
 ### Two windows, named
 
@@ -303,9 +314,12 @@ model    : qwen3.8-flash-next-exl3
 our shell (`shell.html`, `server.py`, `control.py`: the only files we own) wrapped around a
 llama.cpp Web UI vendored byte for byte -- our diff against upstream is zero. Everything lives in
 **one right-hand column** -- session, card/recipe picker, money, speed, connection, log -- and the
-WebUI sits in an iframe beside it; ⌘B / Ctrl+B collapses the column. Run it with
-`python frontend/server.py`; see [frontend/UPSTREAM.md](frontend/UPSTREAM.md) for the pinned
-upstream commit and how to rebuild it.
+WebUI sits in an iframe beside it; ⌘B / Ctrl+B collapses the column. The shell is colour-blocked
+against the WebUI -- warm charcoal by day beside its white page, bone paper by night beside its
+near-black one, switching when the WebUI's own theme does -- and speaks **English, 中文 and 日本語**
+(switch in the header; `control.py` sends codes and numbers, and `shell.html` owns every word). Run it with
+`python frontend/server.py` (port 3020); see [frontend/UPSTREAM.md](frontend/UPSTREAM.md) for the
+pinned upstream commit and how to rebuild it.
 
 `frontend/control.py` is the real control plane behind that column. It is the only thing in the
 kit that can spend money, so it is also where the guardrails are:
@@ -314,19 +328,22 @@ kit that can spend money, so it is also where the guardrails are:
 |---|---|
 | cards | `select()` drives `scripts/up.sh` over WSL -- `google-colab-cli` has no Windows build |
 | money | a CU ledger in `~/.collabosm/ledger.json`; the column shows used / left against `--budget-cu` |
-| confirmation | a bare click returns `confirm_required` with CU/h, ETA and what the load itself costs; only `confirm: true` starts the job (and the billing) |
-| stopping | `停机` runs `scripts/down.sh`; **idle auto-stop** after `--idle-stop-min` (20) with no chat traffic, plus a `--max-session-h` (6) ceiling |
+| confirmation | a bare click returns `confirm_required` with CU/h, ETA and what the load itself costs; only `confirm: true` starts the job (and the billing); `/control/cancel` drops it |
+| stopping | Stop runs `scripts/down.sh`; **idle auto-stop** after `--idle-stop-min` (20) with no chat traffic, plus a `--max-session-h` (6) ceiling; a job that **fails** after `assign` is stopped too, and a session a previous frontend never closed can be stopped from the column |
 | chat | once ready, `/v1/*` is proxied to the live tunnel with the VM key injected; when nothing is live the frontend answers **503** instead of pretending |
 | provisioning | always through `scripts/restore.py`, so an orphaned VM is adopted, never duplicated |
 
 Rehearse the whole flow with no card and no CU:
 
 ```bash
-python frontend/server.py --port 3020 --fake-provision   # real control plane, fake up.sh (~24 s)
-python frontend/server.py --port 3020 --mock             # demo pacing, nothing billed
+python frontend/server.py --fake-provision   # real control plane, fake up.sh (~24 s), rehearsal ledger
+python frontend/server.py --mock             # the same, with a ledger that is never written
+python scripts/dev_stub.py --port 8099 &     # optional: something to chat with while rehearsing
+python frontend/server.py --mock --backend http://127.0.0.1:8099
+COLLABOSM_FAKE_FAIL=serve python frontend/server.py --mock   # rehearse a failure + its auto-stop
 ```
 
-`--fake-provision` prints the same log lines `up.sh` does (`[restore] box: ...`, `stage=weights`,
+Both modes print the same log lines `up.sh` does (`[restore] box: ...`, `stage=weights`,
 the tunnel URL, `READY`), so the rail, the stages and the stop path are all exercised for free.
 Only the WSL call itself is replaced.
 

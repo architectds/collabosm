@@ -177,10 +177,26 @@ time to learn:
 - **Two safety stops, both visible in the rail**: `--idle-stop-min` (default 20 min without chat
   traffic) and `--max-session-h` (default 6 h even with traffic). Chat traffic is anything the frontend
   proxies to `/v1/*`, so a long generation counts as activity.
+- **A failed job stops its box.** `up.sh` stops nothing on its way out, so a failure after `assign`
+  (upload, bootstrap, `serve.sh`, the 50 min wait) used to leave a VM billing behind a ledger entry
+  that said it had closed -- and the rail refused to stop a `failed` job. `_fail()` now runs
+  `down.sh` itself, and Stop stays available in `failed` as a manual retry.
+- **A session nobody closed.** If the frontend exits with a box up, the next one finds an open ledger
+  entry, says so, and offers Stop (it runs `down.sh` and closes the entry). The entry is billed up to
+  its last heartbeat plus Colab's ~90 min idle prune, not up to "now", so a restart days later does not
+  charge a phantom month. New selections wait until it is closed.
+- **`up.sh` was never starting the model.** Nothing called `serve.sh`; the kit worked only because it
+  was run by hand, and the rehearsal hid it by printing the lines only `serve.sh` writes. It is now
+  chained after `bootstrap.sh` on the VM, and READY requires the published URL as well as `/health`
+  (health answers seconds before the tunnel has a hostname).
 - **Rehearse without CU.** `--fake-provision` keeps the real control plane and replaces only the WSL
-  process with `frontend/fake_provision.py` (same log lines, ~24 s, no network). `--mock` swaps in the
-  demo pacing. Both were used to verify the confirm gate, the stages, the ready card, the proxy and the
-  stop path before a single CU was spent.
+  process with `frontend/fake_provision.py` (same log lines, ~24 s, no network). `--mock` is the same
+  rehearsal with a ledger that is never written (it used to be a separate demo control plane, which
+  drifted until the shell could not start it). `COLLABOSM_FAKE_FAIL=serve` rehearses a failure.
+- **Every POST must be same-origin JSON.** Omitting `Access-Control-Allow-Origin` stops a foreign page
+  from reading answers, not from sending a `text/plain` POST -- and `/control/select` starts billing.
+  Both proxies (`frontend/server.py`, `collabosm.py ui`) refuse non-JSON POSTs, foreign `Origin`s and a
+  `Host` that is not this machine (DNS rebinding) before doing anything.
 - **A rehearsal must not touch the money ledger.** A fake run started without `--state-dir` wrote an
   *open session* into `~/.collabosm/ledger.json` and the rail then charged CU for a VM that never
   existed. Fake control planes now default to `.tmp/state-rehearsal/ledger.json`; only a real control
