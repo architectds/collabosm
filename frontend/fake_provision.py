@@ -21,6 +21,9 @@ import time
 
 SCALE = float(os.environ.get("COLLABOSM_FAKE_SECONDS", "24")) / 24.0
 FAIL = os.environ.get("COLLABOSM_FAKE_FAIL", "")
+# the address the rehearsal VM "publishes": the fake VM when one serves (server.py
+# --fake-vm), so the rail couples to what the log said instead of "moving" to it
+URL = os.environ.get("COLLABOSM_FAKE_VM_URL") or "https://rehearsal-collabosm.trycloudflare.com"
 
 
 def say(text: str) -> None:
@@ -72,11 +75,11 @@ if FAIL == "serve":
     row("health:         000")
     say("!! serve.sh reported stage=serve_failed - see /content/serve.log on the VM")
     raise SystemExit(8)
-row("stage:          stage=ready url=https://rehearsal-collabosm.trycloudflare.com port=8090")
+row("stage:          stage=ready url=%s port=8090" % URL)
 row("health:         200")
 row("engine_running: True")
 row("gpu_MiB:        76481, 81920")
-row("tunnel:         https://rehearsal-collabosm.trycloudflare.com")
+row("tunnel:         %s" % URL)
 row('models:         {"data":[{"id":"Qwen3.8-Flash-Next"}]}')
 hold(1.0)
 
