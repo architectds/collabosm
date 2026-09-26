@@ -195,6 +195,19 @@ class Turn:
 METRICS = Metrics()
 
 
+LOOPBACK_NAMES = ("127.0.0.1", "localhost", "::1")
+
+
+def names_server(hostport, bind):
+    """True if `hostport` (a Host header, or an Origin's host[:port]) is this proxy."""
+    try:
+        parts = urllib.parse.urlsplit("//" + hostport)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return False
+    return (port or 80) == bind[1] and (host in LOOPBACK_NAMES or host == bind[0])
+
+
 # The two dialects this client implements, and the upstream path for each.
 ROUTES = {
     "/v1/chat/completions": "/chat/completions",
@@ -358,12 +371,42 @@ class Proxy(BaseHTTPRequestHandler):
     def do_HEAD(self):
         return self.do_GET()
 
+    def _refuse_cross_site(self):
+        """None if this POST may proceed, else (status, message).
+
+        Leaving out Access-Control-Allow-Origin keeps a foreign page from READING
+        an answer; it does not stop one from SENDING a text/plain POST, which needs
+        no preflight -- and this proxy injects the bearer key. So a POST must be
+        JSON (cross-origin JSON needs a preflight, never granted here), from this
+        origin or from no browser at all, to a Host that names this proxy (which
+        also shuts out DNS rebinding).
+        """
+        bind = self.cfg.get("bind") or ("127.0.0.1", DEFAULT_PORT)
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return 415, "POST bodies must be application/json"
+        if not names_server(self.headers.get("Host") or "", bind):
+            return 403, "Host does not name this proxy"
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            u = urllib.parse.urlsplit(origin)
+            if u.scheme != "http" or not names_server(u.netloc, bind):
+                return 403, "cross-origin POST refused"
+        site = (self.headers.get("Sec-Fetch-Site") or "").lower()
+        if site and site not in ("same-origin", "none"):
+            return 403, "cross-site POST refused"
+        return None
+
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if path not in ("/v1/chat/completions", "/v1/responses"):
             return self._json(404, {"error": {
                 "message": "this client implements exactly two dialects: "
                            "/v1/responses and /v1/chat/completions"}})
+        refused = self._refuse_cross_site()
+        if refused:
+            return self._json(refused[0], {"error": {"message": refused[1],
+                                                     "type": "cross_site_refused"}})
         return self._proxy()
 
     # --- the actual passthrough ------------------------------------------
@@ -493,6 +536,7 @@ def cmd_ui(args):
                          % (ui_dir, os.path.basename(sys.argv[0])))
     cfg["ui_dir"] = ui_dir
     cfg["timeout"] = args.timeout
+    cfg["bind"] = (args.host, args.port)
     Proxy.cfg = cfg
     srv = Server((args.host, args.port), Proxy)
     print("collabosm ui  ->  http://%s:%d" % (args.host, args.port))
