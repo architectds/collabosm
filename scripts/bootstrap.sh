@@ -8,7 +8,8 @@
 # Idempotent: existing, complete files are left alone, so a re-run after a VM
 # hiccup costs seconds instead of 5 minutes.
 #
-# Everything prints BOOTSTRAP_OK or BOOTSTRAP_FAILED at the end; scripts/up.sh polls for it.
+# Everything prints BOOTSTRAP_OK or BOOTSTRAP_FAILED at the end; scripts/up.sh polls for it
+# and chains serve.sh after a successful run (exit 0), so the model loads without a second trip.
 set -uo pipefail
 
 : "${RUNTIME:=wheel}"

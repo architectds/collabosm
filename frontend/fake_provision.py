@@ -9,6 +9,10 @@ and the final READY. Nothing here touches Colab, WSL, Docker or the network.
 
     python frontend/fake_provision.py            # ~24 s
     COLLABOSM_FAKE_SECONDS=3 python frontend/fake_provision.py
+    COLLABOSM_FAKE_FAIL=serve python frontend/fake_provision.py   # model never comes up
+
+The failure mode exits the way up.sh does when serve.sh reports failure (exit 8),
+so the rail's failure path -- including the automatic stop -- can be rehearsed too.
 """
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ import os
 import time
 
 SCALE = float(os.environ.get("COLLABOSM_FAKE_SECONDS", "24")) / 24.0
+FAIL = os.environ.get("COLLABOSM_FAKE_FAIL", "")
 
 
 def say(text: str) -> None:
@@ -58,9 +63,15 @@ hold(3.0)
 row("stage:          stage=weights")
 row("gpu_MiB:        0, 81920")
 hold(4.0)
+row("stage:          stage=bootstrapped")
 row("stage:          stage=loading")
 row("gpu_MiB:        41234, 81920")
 hold(4.0)
+if FAIL == "serve":
+    row("stage:          stage=serve_failed")
+    row("health:         000")
+    say("!! serve.sh reported stage=serve_failed - see /content/serve.log on the VM")
+    raise SystemExit(8)
 row("stage:          stage=ready url=https://rehearsal-collabosm.trycloudflare.com port=8090")
 row("health:         200")
 row("engine_running: True")
