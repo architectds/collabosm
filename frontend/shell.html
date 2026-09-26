@@ -4,33 +4,41 @@
 <meta charset="utf-8" />
 <title>collabosm</title>
 <style>
-  :root{--rail:340px;--bg:#0b0e13;--panel:#10131a;--line:#232a36;--fg:#e8ecf3;--dim:#8b97a8}
+  :root{--rail:352px;--bg:#0b0e13;--panel:#10131a;--line:#232a36;--fg:#e8ecf3;--dim:#8b97a8}
   *{box-sizing:border-box}
   body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);
-       font:13px/1.45 ui-sans-serif,system-ui,Segoe UI,sans-serif}
-  header{display:flex;align-items:center;gap:12px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
+       font:12.5px/1.42 ui-sans-serif,system-ui,Segoe UI,sans-serif}
+  header{display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
   header b{font-weight:600;font-size:13px}
   header .sp{flex:1}
   header button{background:#1b2230;color:#cfe0ff;border:1px solid #2b3444;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:12px}
+  header button.stop{border-color:#7a3b3b;background:#2a1a1a;color:#ffc9c9}
+  header button[hidden]{display:none}
   main{flex:1;display:grid;grid-template-columns:1fr var(--rail);min-height:0;transition:grid-template-columns .18s ease}
   main.collapsed{grid-template-columns:1fr 0px}
   iframe{border:0;width:100%;height:100%;background:#fff}
-  #rail{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+  /* One column, one scrollbar: every section is stacked here. */
+  #rail{border-left:1px solid var(--line);background:var(--panel);overflow:auto;min-width:0;padding:8px 10px 20px}
   main.collapsed #rail{display:none}
-  .tabs{display:flex;border-bottom:1px solid var(--line)}
-  .tabs button{flex:1;background:none;border:0;color:var(--dim);padding:10px 6px;cursor:pointer;font-size:12px;border-bottom:2px solid transparent}
-  .tabs button.on{color:var(--fg);border-bottom-color:#4c8dff}
-  #body{flex:1;overflow:auto;padding:10px 12px}
-  .card{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#161a23}
-  .meta{color:var(--dim);font-size:12px;margin-top:3px}
-  .btn{margin-top:8px;width:100%;padding:7px 10px;border-radius:8px;border:1px solid #2f6fd0;background:#1b2b45;color:#cfe0ff;cursor:pointer;font-size:12px}
+  h4{margin:12px 0 6px;font-size:11px;letter-spacing:.06em;color:#6f7d90;text-transform:uppercase}
+  h4:first-child{margin-top:2px}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:2px 0;color:#b9c4d4}
+  .row b{font-weight:500;color:#e8ecf3;text-align:right;word-break:break-all}
+  .card{border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin-bottom:6px;background:#161a23}
+  .card.warn{border-color:#7a5a2b;background:#211a10}
+  .card.ok{border-color:#2c5c3a;background:#111c16}
+  .meta{color:var(--dim);font-size:11.5px;margin-top:2px}
+  .btn{width:100%;margin-top:6px;padding:6px 9px;border-radius:7px;border:1px solid #2f6fd0;background:#1b2b45;color:#cfe0ff;cursor:pointer;font-size:12px}
+  .btn.go{border-color:#2f7a45;background:#1a3a26;color:#c8ffd8}
+  .btn.no{border-color:#3a3f4a;background:#1b1e26;color:#c7cedb}
   .btn[disabled]{opacity:.5;cursor:default}
-  .bar{height:6px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:8px}
+  .bar{height:5px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:6px}
   .bar>i{display:block;height:100%;background:#4c8dff;transition:width .4s}
-  .kv{display:flex;justify-content:space-between;padding:3px 0;font-size:12px;color:#b9c4d4}
-  .kv span:last-child{color:var(--fg)}
-  .st{font-size:12px;color:#9fb4d8;margin-top:6px}
-  code{background:#0d1016;border:1px solid var(--line);border-radius:6px;padding:1px 5px;font-size:11px}
+  .log{font:10.5px/1.35 Consolas,monospace;color:#7f8ea3;white-space:pre-wrap;word-break:break-all;max-height:150px;overflow:auto}
+  code{background:#0d1016;border:1px solid var(--line);border-radius:5px;padding:1px 4px;font-size:10.5px;word-break:break-all}
+  details{margin-top:4px}
+  summary{cursor:pointer;color:#8b97a8;font-size:11.5px;outline:none}
+  .pill{display:inline-block;font-size:10.5px;border:1px solid var(--line);border-radius:99px;padding:0 6px;color:#9fb4d8;margin-left:4px}
 </style>
 </head>
 <body>
@@ -38,75 +46,150 @@
   <b>collabosm</b>
   <span class="meta" id="hdr">正在读取控制面…</span>
   <span class="sp"></span>
-  <button id="toggle">收起右栏 ⌘B</button>
+  <button id="stop" class="stop" hidden>停机</button>
+  <button id="toggle">收起 ⌘B</button>
 </header>
 <main id="main">
   <iframe id="ui" src="/?embed=1" title="collabosm chat" allow="clipboard-write; clipboard-read"></iframe>
-  <aside id="rail">
-    <div class="tabs">
-      <button data-tab="cards" class="on">卡与配方</button>
-      <button data-tab="conn">连接</button>
-      <button data-tab="stat">状态</button>
-    </div>
-    <div id="body"></div>
-  </aside>
+  <aside id="rail"><div id="body"></div></aside>
 </main>
 <script>
-let st = null, tab = 'cards', timer = null;
+// The upstream WebUI registers a service worker at scope "/" (workbox, sw.js).
+// A shell cached by an older build is how a stale injected panel came back once
+// -- a second copy of this rail inside the iframe. Drop both on load: the files
+// here are local, so nothing needs to be cached.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister()));
+  if (window.caches) caches.keys().then((ks) => ks.forEach((k) => caches.delete(k)));
+}
+let st = null;
 const $ = (id) => document.getElementById(id);
 const fmt = (n, d) => (n === null || n === undefined) ? '—' : Number(n).toFixed(d === undefined ? 1 : d);
+const esc = (s) => String(s === null || s === undefined ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const clk = (s) => (s === null || s === undefined) ? '—'
+  : Math.floor(s / 60) + ':' + String(Math.max(0, s % 60)).padStart(2, '0');
+const BUSY = ['requesting', 'uploading', 'bootstrapping', 'loading', 'stopping'];
+const row = (k, v) => '<div class="row"><span>' + k + '</span><b>' + v + '</b></div>';
 
 $('toggle').onclick = () => {
   const m = $('main');
   m.classList.toggle('collapsed');
-  $('toggle').textContent = m.classList.contains('collapsed') ? '展开右栏 ⌘B' : '收起右栏 ⌘B';
+  $('toggle').textContent = m.classList.contains('collapsed') ? '展开 ⌘B' : '收起 ⌘B';
 };
 addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); $('toggle').click(); } });
-for (const b of document.querySelectorAll('.tabs button')) {
-  b.onclick = () => { tab = b.dataset.tab; for (const x of document.querySelectorAll('.tabs button')) x.classList.toggle('on', x === b); render(); };
-}
 
 async function refresh() {
   try { st = await (await fetch('/control/status', { cache: 'no-store' })).json(); render(); }
   catch (e) { $('hdr').textContent = '控制面不可达：' + e; }
 }
+async function post(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(body || {}) });
+  let j = {}; try { j = await r.json(); } catch (e) {}
+  await refresh();
+  return j;
+}
 
 function render() {
   if (!st) return;
-  const busy = st.stage && st.stage !== 'idle' && st.stage !== 'ready';
-  $('hdr').textContent = st.stage === 'ready' ? ('已就绪 · ' + st.live_model)
-                        : (busy ? (st.stage_label + ' · ' + fmt(st.progress, 0) + '%') : '无卡无模型');
+  const busy = BUSY.includes(st.stage), ready = st.stage === 'ready';
+  const ep = st.endpoint || {}, cli = st.cli || {}, bill = st.billing || {}, m = st.measured || {};
+  $('hdr').textContent = ready ? ('已就绪 · ' + st.live_model)
+    : (busy ? (st.stage_label + ' · ' + fmt(st.progress, 0) + '%')
+            : (st.stage === 'idle' ? '无卡无模型' : st.stage_label));
+  $('stop').hidden = !(busy || ready);
+  $('stop').onclick = () => post('/control/stop', {});
+
   let h = '';
-  if (tab === 'cards') {
-    for (const r of st.recipes) {
-      const sel = st.selected === r.id, dis = (busy || st.stage === 'ready') ? 'disabled' : '';
-      h += '<div class="card"><b>' + r.card + '</b>' + (sel ? ' · 当前' : '') +
-           '<div class="meta">' + r.model + ' · ' + r.quant + '</div>' +
-           '<div class="meta">' + fmt(r.cu_per_hour, 2) + ' CU/h · ' + r.vram_gb + ' GB 显存 · 预计 ' + r.eta_min + ' 分钟</div>' +
-           '<button class="btn" data-r="' + r.id + '" ' + dis + '>' + (sel && st.stage === 'ready' ? '已就绪' : '选它并启动') + '</button></div>';
-    }
-    if (busy) h += '<div class="card"><b>' + st.stage_label + '</b><div class="bar"><i style="width:' + st.progress + '%"></i></div><div class="st">' + st.progress_note + '</div></div>';
-  } else if (tab === 'conn') {
-    h += '<div class="card"><b>Colab CLI</b><div class="meta">已安装 · 已授权</div></div>';
-    h += '<div class="card"><b>当前端点</b><div class="meta"><code>http://127.0.0.1:3010/v1</code></div>' +
-         '<div class="meta">密钥由本地代理持有，不进浏览器</div></div>';
-    h += '<div class="card"><b>借用别人的卡</b><div class="meta">粘贴 URL + key 即可（可选）</div>' +
-         '<div class="meta">' + (st.recipes.length ? '已有 ' + st.recipes.length + ' 个配方可选' : '') + '</div></div>';
-  } else {
-    const m = st.metrics || {};
-    h = '<div class="card"><b>本次会话</b>' +
-        '<div class="kv"><span>prefill</span><span>' + fmt(m.prefill, 0) + ' t/s</span></div>' +
-        '<div class="kv"><span>decode</span><span>' + fmt(m.decode, 1) + ' t/s</span></div>' +
-        '<div class="kv"><span>剩余 CU</span><span>' + fmt(st.cu_left, 1) + '</span></div>' +
-        '<div class="kv"><span>空闲自动停机</span><span>' + st.idle_stop_min + ' 分钟</span></div></div>';
+
+  // ---- session ---------------------------------------------------------- //
+  h += '<h4>本会话</h4>';
+  if (st.confirm) {
+    const w = st.confirm;
+    h += '<div class="card warn"><b>' + esc(w.headline) + '</b>';
+    for (const ln of (w.lines || [])) h += '<div class="meta">' + esc(ln) + '</div>';
+    h += '<button class="btn go" id="go">开始（现在开始计费）</button>' +
+         '<button class="btn no" id="cancel">取消</button></div>';
   }
+  if (ready) {
+    h += '<div class="card ok">' +
+         row('模型', esc(st.live_model) + '<span class="pill">MTP</span>') +
+         row('端点', '<code>' + esc(ep.base || '—') + '</code>') +
+         row('密钥', ep.key ? '代理持有' : (ep.key_pending ? '读取中…' : '未读到')) +
+         row('空闲停机', clk(st.idle_left_s)) +
+         row('已跑', fmt(st.session_hours, 2) + ' h') +
+         '<button class="btn no" id="stop2">停机（停止计费）</button></div>';
+  } else if (busy) {
+    h += '<div class="card"><b>' + esc(st.stage_label) + '</b>' +
+         '<div class="bar"><i style="width:' + st.progress + '%"></i></div>' +
+         '<div class="meta">' + esc(st.progress_note) + '</div></div>';
+  } else {
+    h += '<div class="card"><div class="row"><span>状态</span><b>' + esc(st.stage_label) + '</b></div>' +
+         '<div class="meta">' + esc(st.progress_note) + '</div></div>';
+  }
+
+  // ---- recipes ---------------------------------------------------------- //
+  h += '<h4>卡与配方</h4>';
+  for (const r of st.recipes) {
+    const sel = st.selected === r.id, dis = (busy || ready || st.confirm) ? 'disabled' : '';
+    h += '<div class="card"><b>' + esc(r.card) + '</b>' + (sel ? '<span class="pill">当前</span>' : '') +
+         (r.verified ? '' : '<span class="pill">未实测</span>') +
+         '<div class="meta">' + esc(r.model) + ' · ' + esc(r.quant) + '</div>' +
+         '<div class="meta">' + fmt(r.cu_per_hour, 2) + ' CU/h · ' + fmt(r.vram_gb, 0) +
+         ' GB · 约 ' + r.eta_min + ' 分钟</div>' +
+         '<button class="btn" data-r="' + r.id + '" ' + dis + '>' +
+         (ready && sel ? '已就绪' : '选它并启动') + '</button></div>';
+  }
+
+  // ---- money ------------------------------------------------------------ //
+  h += '<h4>钱</h4><div class="card">' +
+       row('本月已用', fmt(st.cu_used, 2) + ' CU') +
+       row('本月剩余', fmt(st.cu_left, 1) + ' / ' + fmt(st.budget_cu, 0) + ' CU') +
+       row('本次会话', fmt(st.session_hours, 2) + ' h') +
+       row('空闲停机', st.idle_stop_min + ' 分钟') +
+       row('连续上限', st.max_session_h + ' 小时') + '</div>';
+
+  // ---- speed ------------------------------------------------------------ //
+  h += '<h4>速度</h4><div class="card">' +
+       row('prefill', fmt((st.metrics || {}).prefill, 0) + ' t/s' +
+           (st.metrics ? '' : '<span class="pill">参考</span>')) +
+       row('decode', fmt((st.metrics || {}).decode, 1) + ' t/s' +
+           (st.metrics ? '' : '<span class="pill">参考</span>')) +
+       '<div class="meta">' + esc(m.where || '') + '</div></div>';
+
+  // ---- connection ------------------------------------------------------- //
+  h += '<h4>连接</h4><div class="card">' +
+       row('Colab CLI', esc(cli.colab)) +
+       row('WSL', esc(cli.wsl)) +
+       row('在计费实例', (bill.count === null || bill.count === undefined) ? '未探测'
+                          : bill.count + ' 个') +
+       '<details><summary>要跑的命令</summary><div class="log">' +
+       esc(cli.command || '（第一次选配方时生成）') + '</div></details>' +
+       '<details><summary>服务端账目原文</summary><div class="log">' +
+       esc(bill.raw || '（未探测）') + '</div></details></div>';
+
+  // ---- log -------------------------------------------------------------- //
+  h += '<h4>日志</h4><div class="card"><div class="log">' +
+       esc((st.log_tail || []).slice(-10).join('\n')) + '</div>' +
+       '<div class="meta">' + esc(st.footnote || '') + '</div></div>';
+
   $('body').innerHTML = h;
-  for (const b of document.querySelectorAll('.btn')) b.onclick = () => select(b.dataset.r);
+
+  for (const b of document.querySelectorAll('.btn[data-r]')) {
+    b.onclick = async () => { const r = await post('/control/select', { recipe: b.dataset.r });
+                              if (r.message && r.code !== 'confirm_required') flash(r.message); };
+  }
+  const go = $('go'), cancel = $('cancel'), stop2 = $('stop2');
+  if (go) go.onclick = () => post('/control/select', { recipe: st.confirm.recipe, confirm: true });
+  if (cancel) cancel.onclick = () => { st.confirm = null; render(); };
+  if (stop2) stop2.onclick = () => post('/control/stop', {});
 }
-async function select(id) { await fetch('/control/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipe: id }) }); refresh(); }
+
+function flash(msg) { $('hdr').textContent = msg; }
 
 refresh();
-setInterval(refresh, 1000);
+setInterval(refresh, 1500);
 </script>
 </body>
 </html>

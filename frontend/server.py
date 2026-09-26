@@ -9,9 +9,18 @@ Routes
     /                       our shell; the WebUI is embedded as an iframe
     /?embed=1               the WebUI itself, served in the ROOT path space
     /control/status         state the shell's right rail renders
-    /control/select         ask for a card+recipe (P0-d wires this to restore.py)
+    /control/select         ask for a card+recipe; needs {"confirm": true} to bill
+    /control/stop           stop the VM now (the point of the whole kit)
     /v1/*  /props  /slots  /tools  /models/*  /cors-proxy
-                            proxied to the engine, with the model field rewritten
+                            proxied to the tunnel (key injected) or to --backend,
+                            with the model field rewritten
+
+The control plane is frontend/control.py: it drives scripts/up.sh over WSL,
+keeps the CU ledger, refuses to start without an explicit confirmation, and
+stops the box after `--idle-stop-min` of no chat traffic. `--mock` swaps in the
+DemoControl below, which is the same contract at 1-minute-per-stage pacing, so
+the shell can be driven with no card; `--fake-provision` keeps the real control
+plane but runs frontend/fake_provision.py instead of touching Colab.
 
 Why the WebUI is served at the root and not under a prefix: it fetches /v1/*,
 /props and /tools with absolute paths, and its own assets with relative ones.
@@ -36,6 +45,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 UPSTREAM = os.path.join(HERE, "upstream")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+try:
+    from control import Control as ProvisionControl
+except Exception as _exc:                        # pragma: no cover - import guard
+    ProvisionControl = None
+    _CONTROL_IMPORT_ERROR = _exc
 
 # --------------------------------------------------------------------------- #
 # control plane                                                               #
@@ -60,8 +77,13 @@ STAGES = [("requesting", "正在请求实例并校验形状", 5.0),
 STAGE_ZH = {"requesting": "申请中", "downloading": "下载权重", "loading": "加载中"}
 
 
-class Control:
-    """The seam P0-d replaces: status()/select() are all the shell needs."""
+class DemoControl:
+    """The same contract as frontend/control.py, at demo pacing and no billing.
+
+    `--mock` uses this: no WSL, no Colab, no CU, one stage per few seconds. It is
+    what the rail is driven against when there is no card to spend, and it keeps
+    the shell's contract honest -- status()/select()/stop() and nothing else.
+    """
 
     def __init__(self, mock_speed: float = 4.0, idle_stop_min: int = 20):
         self.mock_speed = mock_speed
@@ -79,11 +101,38 @@ class Control:
         with self.lock:
             return dict(self.state)
 
-    def select(self, recipe_id: str) -> bool:
-        if not any(r["id"] == recipe_id for r in RECIPES):
-            return False
+    def select(self, recipe_id: str, confirm: bool = False) -> dict:
+        recipe = next((r for r in RECIPES if r["id"] == recipe_id), None)
+        if recipe is None:
+            return {"ok": False, "code": "unknown_recipe", "message": "没有这个配方"}
+        if not confirm:
+            return {"ok": True, "code": "confirm_required", "warning": {
+                "recipe": recipe_id, "card": recipe["card"], "model": recipe["model"],
+                "cu_per_hour": recipe["cu_per_hour"], "eta_min": recipe["eta_min"],
+                "cu_estimate": round(recipe["cu_per_hour"] * (recipe["eta_min"] + 5) / 60, 2),
+                "headline": "（演示）点“开始”开始计费：%s" % recipe["card"],
+                "lines": ["这是 --mock 演示，不会真的申请实例。",
+                          "真控制面是 frontend/control.py。"]}}
         threading.Thread(target=self._provision, args=(recipe_id,), daemon=True).start()
-        return True
+        return {"ok": True, "code": "started", "recipe": recipe_id}
+
+    def stop(self, reason: str = "manual") -> dict:
+        with self.lock:
+            if self.state["stage"] in ("idle", "stopped"):
+                return {"ok": True, "code": "nothing_to_stop"}
+            self.state.update(stage="stopped", stage_label="已停机", progress=0.0,
+                              live_model=None, metrics=None,
+                              progress_note="已停机（%s）— 演示" % reason)
+        return {"ok": True, "code": "stopping", "reason": reason}
+
+    def backend_base(self):
+        return None
+
+    def api_key(self):
+        return None
+
+    def touch(self) -> None:
+        return None
 
     def _provision(self, recipe_id: str) -> None:
         r = next(x for x in RECIPES if x["id"] == recipe_id)
@@ -117,7 +166,7 @@ class Control:
 # HTTP                                                                        #
 # --------------------------------------------------------------------------- #
 
-CONTROL: Control
+CONTROL = None                 # DemoControl or frontend.control.Control
 ARGS: argparse.Namespace
 MIME = {"html": "text/html", "js": "text/javascript", "css": "text/css",
         "json": "application/json", "svg": "image/svg+xml", "png": "image/png",
@@ -155,11 +204,24 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _proxy(self, body=None):
-        req = urllib.request.Request(ARGS.backend + self.path, data=body, method=self.command)
+        # Live tunnel if the box is up (the key is injected here and never
+        # reaches the browser), otherwise --backend, which is the local stub or
+        # the collabosm client proxy.
+        live = CONTROL.backend_base()
+        if live is None and not ARGS.mock and not ARGS.fake_provision:
+            return self._json(503, {"error": {
+                "message": "没有在跑的实例：在右栏选一个配方，等它变成“已就绪”再发消息",
+                "type": "no_live_session"}})
+        req = urllib.request.Request((live or ARGS.backend) + self.path,
+                                     data=body, method=self.command)
         for k, v in self.headers.items():
             if k.lower() in ("host", "content-length", "accept-encoding", "connection"):
                 continue
+            if live and k.lower() == "authorization":
+                continue            # the VM's key is ours to hold, not the browser's
             req.add_header(k, v)
+        if live and CONTROL.api_key():
+            req.add_header("Authorization", "Bearer " + CONTROL.api_key())
         try:
             with urllib.request.urlopen(req, timeout=ARGS.timeout) as resp:
                 self.send_response(resp.status)
@@ -192,7 +254,9 @@ class Handler(BaseHTTPRequestHandler):
                                     "default_generation_settings": {"n_ctx": ARGS.ctx}})
         if path == "/slots":
             st = CONTROL.status()
-            return self._json(200, [{"id": 0, "is_processing": st["stage"] == "provisioning"}])
+            busy = st["stage"] in ("requesting", "uploading", "bootstrapping",
+                                   "loading", "stopping")
+            return self._json(200, [{"id": 0, "is_processing": busy}])
         if path == "/tools":
             return self._json(200, [])
         if path.startswith("/v1") or path.startswith("/models") or path == "/cors-proxy":
@@ -221,12 +285,16 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/control/select":
             try:
-                rid = json.loads(raw or b"{}").get("recipe")
+                body = json.loads(raw or b"{}")
             except Exception:
                 return self._json(400, {"error": {"message": "bad json"}})
-            if not CONTROL.select(rid):
-                return self._json(404, {"error": {"message": "unknown recipe", "recipe": rid}})
-            return self._json(200, {"ok": True, "selected": rid})
+            res = CONTROL.select(body.get("recipe"), confirm=bool(body.get("confirm")))
+            code = res.get("code")
+            status = {"unknown_recipe": 404, "busy": 409, "budget": 409,
+                      "unverified": 409, "stop_first": 409}.get(code, 200)
+            return self._json(status, res)
+        if path == "/control/stop":
+            return self._json(200, CONTROL.stop("manual"))
         if path.startswith("/v1") or path.startswith("/models"):
             if path.endswith("/chat/completions") and raw:
                 try:
@@ -235,6 +303,7 @@ class Handler(BaseHTTPRequestHandler):
                     if st["stage"] == "ready":
                         payload["model"] = st["live_model"]
                     CONTROL.note_outgoing_model(payload.get("model"))
+                    CONTROL.touch()
                     raw = json.dumps(payload).encode()
                     self.log_message("model -> %r", payload.get("model"))
                 except Exception as e:
@@ -252,10 +321,38 @@ def main() -> int:
                     help="OpenAI-compatible engine (or the collabosm client proxy)")
     ap.add_argument("--ctx", type=int, default=262144)
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--mock", action="store_true",
+                    help="demo control plane: no WSL, no Colab, no CU")
     ap.add_argument("--mock-speed", type=float, default=4.0,
                     help="provisioning runs this much faster than real for demos")
+    ap.add_argument("--fake-provision", action="store_true",
+                    help="real control plane, but frontend/fake_provision.py instead of Colab")
+    ap.add_argument("--session", default=os.environ.get("COLLABOSM_SESSION", "collabosm"))
+    ap.add_argument("--wsl-distro", default=os.environ.get("COLLABOSM_WSL", "Ubuntu"))
+    ap.add_argument("--budget-cu", type=float, default=200.0,
+                    help="CU in the plan month; the rail shows what is left")
+    ap.add_argument("--idle-stop-min", type=int, default=20,
+                    help="stop the VM after this many minutes without chat traffic")
+    ap.add_argument("--max-session-h", type=float, default=6.0)
+    ap.add_argument("--state-dir", default=None,
+                    help="where ledger.json lives (default ~/.collabosm)")
     ARGS = ap.parse_args()
-    CONTROL = Control(mock_speed=ARGS.mock_speed)
+    if ARGS.mock:
+        CONTROL = DemoControl(mock_speed=ARGS.mock_speed)
+        print("[fe] control    demo (--mock): nothing is billed", flush=True)
+    else:
+        if ProvisionControl is None:
+            print("!! cannot import frontend/control.py: %r" % _CONTROL_IMPORT_ERROR,
+                  file=sys.stderr)
+            return 2
+        CONTROL = ProvisionControl(os.path.dirname(HERE), session=ARGS.session,
+                                   distro=ARGS.wsl_distro, budget_cu=ARGS.budget_cu,
+                                   idle_stop_min=ARGS.idle_stop_min,
+                                   max_session_h=ARGS.max_session_h,
+                                   fake=ARGS.fake_provision, state_dir=ARGS.state_dir)
+        print("[fe] control    %s -> wsl -d %s (idle stop %d min, budget %.0f CU)"
+              % ("rehearsal" if ARGS.fake_provision else "colab", ARGS.wsl_distro,
+                 ARGS.idle_stop_min, ARGS.budget_cu), flush=True)
     if not os.path.isfile(os.path.join(UPSTREAM, "index.html")):
         print("!! upstream/index.html missing -- the vendored WebUI build is not here",
               file=sys.stderr)

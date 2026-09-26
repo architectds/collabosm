@@ -744,10 +744,23 @@ def cmd_start(args):
     else:
         print("client already running on %s" % base)
 
+    # One window when we can: frontend/shell.html already carries the chat and
+    # the 卡与配方 rail side by side, so opening a separate status window just
+    # duplicates it. The two-window path stays as the fallback.
+    shell_url = "http://127.0.0.1:%d/" % args.frontend_port
+    if _healthy(shell_url):
+        print("shell  : %s   (chat + 卡与配方 in one window)" % shell_url)
+        if args.no_open:
+            return 0
+        open_window(shell_url)
+        return 0
+
     status_url = base + "/status"
     chat_url = cfg["chat_url"] or (base + "/chat")
     print("chat   : %s" % chat_url)
     print("status : %s" % status_url)
+    print("       (no frontend on port %d -- start it with: python frontend/server.py)"
+          % args.frontend_port)
     if args.no_open:
         return 0
     open_window(status_url)
@@ -819,6 +832,8 @@ def main(argv=None):
     common(p)
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p.add_argument("--frontend-port", type=int, default=3020,
+                   help="if the frontend shell answers here, open that one window instead")
     p.add_argument("--no-open", action="store_true")
 
     p = sub.add_parser("startup", help="open both windows automatically at login")

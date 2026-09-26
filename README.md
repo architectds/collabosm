@@ -300,11 +300,35 @@ model    : qwen3.8-flash-next-exl3
 ```
 
 **This repo now ships its own frontend** -- and still does not *write* a chat app. `frontend/` is
-our shell (`shell.html` + `server.py`, the only two files we own) wrapped around a llama.cpp Web UI
-vendored byte for byte: our diff against upstream is zero. The shell puts the card/recipe picker,
-the provisioning progress and the wire-level metrics in a collapsible right rail, and embeds the
-WebUI in an iframe. Run it with `python frontend/server.py`; see
-[frontend/UPSTREAM.md](frontend/UPSTREAM.md) for the pinned upstream commit and how to rebuild it.
+our shell (`shell.html`, `server.py`, `control.py`: the only files we own) wrapped around a
+llama.cpp Web UI vendored byte for byte -- our diff against upstream is zero. Everything lives in
+**one right-hand column** -- session, card/recipe picker, money, speed, connection, log -- and the
+WebUI sits in an iframe beside it; ⌘B / Ctrl+B collapses the column. Run it with
+`python frontend/server.py`; see [frontend/UPSTREAM.md](frontend/UPSTREAM.md) for the pinned
+upstream commit and how to rebuild it.
+
+`frontend/control.py` is the real control plane behind that column. It is the only thing in the
+kit that can spend money, so it is also where the guardrails are:
+
+| what | how |
+|---|---|
+| cards | `select()` drives `scripts/up.sh` over WSL -- `google-colab-cli` has no Windows build |
+| money | a CU ledger in `~/.collabosm/ledger.json`; the column shows used / left against `--budget-cu` |
+| confirmation | a bare click returns `confirm_required` with CU/h, ETA and what the load itself costs; only `confirm: true` starts the job (and the billing) |
+| stopping | `停机` runs `scripts/down.sh`; **idle auto-stop** after `--idle-stop-min` (20) with no chat traffic, plus a `--max-session-h` (6) ceiling |
+| chat | once ready, `/v1/*` is proxied to the live tunnel with the VM key injected; when nothing is live the frontend answers **503** instead of pretending |
+| provisioning | always through `scripts/restore.py`, so an orphaned VM is adopted, never duplicated |
+
+Rehearse the whole flow with no card and no CU:
+
+```bash
+python frontend/server.py --port 3020 --fake-provision   # real control plane, fake up.sh (~24 s)
+python frontend/server.py --port 3020 --mock             # demo pacing, nothing billed
+```
+
+`--fake-provision` prints the same log lines `up.sh` does (`[restore] box: ...`, `stage=weights`,
+the tunnel URL, `READY`), so the rail, the stages and the stop path are all exercised for free.
+Only the WSL call itself is replaced.
 
 Any other OpenAI-compatible client works too: `uv tool install open-webui`, then
 Settings -> Connections -> OpenAI API with the values above. That path is now **deprecated** -- it
