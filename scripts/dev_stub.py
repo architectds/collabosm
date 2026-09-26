@@ -115,12 +115,44 @@ def _record(payload):
         pass
 
 
-def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=False):
-    text = ("<think>%s</think>\n%s" % (thoughts, answer)) if think else answer
+SAMPLE = {"string": "stub", "integer": 1, "number": 1.5, "boolean": True,
+          "array": ["stub"], "object": {}}
+
+
+def tool_call_for(prompt):
+    """What this model writes when it calls a tool -- Qwen3-Coder XML -- aimed at the
+    first tool the rendered prompt offers, every required parameter filled."""
+    i = prompt.find("<tools>\n")
+    if i < 0:
+        return None
+    first = prompt[i + len("<tools>\n"):].split("\n", 1)[0]
+    try:
+        tool = json.loads(first)
+    except ValueError:
+        return None
+    fn = tool.get("function", tool)
+    params = fn.get("parameters") or {}
+    props = params.get("properties") or {}
+    lines = ["I will call %s." % fn.get("name"), "", "<tool_call>",
+             "<function=%s>" % fn.get("name")]
+    for name in params.get("required") or list(props)[:1]:
+        kind = (props.get(name) or {}).get("type", "string")
+        value = SAMPLE.get(kind if isinstance(kind, str) else "string", "stub")
+        lines += ["<parameter=%s>" % name,
+                  value if isinstance(value, str) else json.dumps(value), "</parameter>"]
+    return "\n".join(lines + ["</function>", "</tool_call>"])
+
+
+def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=False,
+                   tool_call=False):
+    plain = ("<think>%s</think>\n%s" % (thoughts, answer)) if think else answer
 
     def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None,
                           stops=None, embeddings=None):
         """Same contract as the shipping seam: yield raw text fragments."""
+        call = tool_call_for(prompt) if tool_call else None
+        text = plain if call is None else (
+            ("<think>%s</think>\n%s" % (thoughts, call)) if think else call)
         _record({"prompt": prompt, "embeddings": len(embeddings or []),
                  "vision_calls": getattr(api_server.VISION, "calls", 0)})
         api_server.LAST.clear()
@@ -144,8 +176,10 @@ def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=F
         """The one-shot path the server falls back to (same signature as shipped)."""
         if delay:
             time.sleep(delay * 3)
-        return {"text": text, "prompt_tokens": 29, "cached_tokens": 0,
-                "new_tokens": len(text) // 4, "eos_reason": "max_new_tokens"}
+        # A complete answer: the server now marks max_new_tokens as a truncation
+        # (Responses status "incomplete"), which is not what this stub is standing in for.
+        return {"text": plain, "prompt_tokens": 29, "cached_tokens": 0,
+                "new_tokens": len(plain) // 4, "eos_reason": "stop_token"}
 
     api_server._engine_fragments = _engine_fragments
     api_server._generate_blocking = _generate_blocking
@@ -170,9 +204,12 @@ def main():
                     help="engine yields nothing, to exercise the blocking fallback")
     ap.add_argument("--vision", action="store_true",
                     help="install a fake vision tower so image input can be tested")
+    ap.add_argument("--tool-call", action="store_true",
+                    help="when the request offers tools, answer with a call to the first one")
     a = ap.parse_args()
 
-    install_engine(ANSWER, THOUGHTS, a.chunk, a.delay, a.think, a.silent, a.vision)
+    install_engine(ANSWER, THOUGHTS, a.chunk, a.delay, a.think, a.silent, a.vision,
+                   a.tool_call)
     srv = ThreadingHTTPServer((a.host, a.port), api_server.Handler)
     print("[dev_stub] listening on http://%s:%d  (chunk=%d delay=%.3fs think=%s)"
           % (a.host, a.port, a.chunk, a.delay, a.think), flush=True)
