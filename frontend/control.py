@@ -155,7 +155,15 @@ class Control:
         self.budget_cu = float(budget_cu)
         self.idle_stop_min = int(idle_stop_min)
         self.max_session_h = float(max_session_h)
-        self.state_dir = state_dir or os.path.join(os.path.expanduser("~"), ".collabosm")
+        # A rehearsal must never write into the money ledger: without this, a
+        # fake run that nobody stopped leaves an "open session" behind and the
+        # rail charges CU for a VM that was never created.
+        if state_dir:
+            self.state_dir = state_dir
+        elif fake:
+            self.state_dir = os.path.join(self.root, ".tmp", "state-rehearsal")
+        else:
+            self.state_dir = os.path.join(os.path.expanduser("~"), ".collabosm")
         self.ledger_path = os.path.join(self.state_dir, "ledger.json")
 
         self.lock = threading.RLock()
