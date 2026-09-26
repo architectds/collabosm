@@ -116,7 +116,7 @@ short prompts, the card warns). Quality past 262K is not measured yet.
 | `recipes.json` | **the recipe registry**: cards, models, and the launch settings for each pair, every number marked measured or not |
 | `scripts/recipe.py` | resolves a recipe id into the environment `up` launches with (`list`, `show`, `env`, `vmenv`, `check`) |
 | `scripts/restore.py` | **the session restore script.** Re-attaches an orphaned VM from server truth, or creates one and actually requests the recipe's shape. Refuses/stops a box below the recipe's VRAM before spending anything. |
-| `scripts/colab_keepalive.py` | tells Colab the box is in use (the frontend calls it only while it is), and re-registers the CLI's session record when the CLI drops it |
+| `scripts/colab_keepalive.py` | tells Colab the box is in use (the frontend calls it only while it is): the keep-alive ping plus, with `--touch`, one trivial statement on the kernel -- the ping alone did not hold a box. Also refreshes the CLI's session record from the live assignment, and re-registers it when the CLI drops it |
 | `scripts/colab_ccu.py` | the account's real CU balance and burn rate, read from Colab |
 | `scripts/colab_auth.py` | the CLI's own sign-in, for the frontend: `status`, `login` (loopback redirect), `logout` (revoke) |
 | `scripts/probe_gpu.py` | runs on the VM; reports VRAM/RAM/cc/disk as one JSON line |

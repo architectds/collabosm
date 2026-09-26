@@ -151,13 +151,15 @@ api_server.py on 127.0.0.1:8090  ->  cloudflared --url http://127.0.0.1:8090
   nothing, so *reloading to change one flag* is the main waste. Batch experiments into one load: the
   generator chunk size and the CPU tier are both settable without reloading (chunk size is a Generator
   argument), while `-cs`, `-cq`, `-ndt` and `-ccs` are load-time.
-- **Colab does not see chat.** It counts two things as use: the notebook kernel (`colab exec`) and the
-  CLI's keep-alive ping. Requests through the Cloudflare tunnel are neither, so a box whose service was
-  up was reclaimed within 25 minutes of the last `colab exec` (2026-09-26: last exec 02:35:37 UTC,
-  assignment list empty at 03:00:05). The frontend therefore sends a keep-alive every 3 minutes
-  **while the box is in use** -- a chat inside the idle-stop window -- and never otherwise
-  (`scripts/colab_keepalive.py`, one `wsl.exe` call per ping). An idle box is left to the idle stop,
-  or to Colab.
+- **Colab does not see chat.** Requests through the Cloudflare tunnel are not use, so a box whose
+  service was up was reclaimed within 25 minutes of the last `colab exec` (2026-09-26: last exec
+  02:35:37 UTC, assignment list empty at 03:00:05). The CLI's keep-alive ping alone is not enough
+  either: the same day a box pinged every 3 minutes was reclaimed 22 minutes after its last `colab
+  exec`, 40 s after a ping that succeeded. What Colab counts is the notebook kernel. The frontend
+  therefore, every 3 minutes **while the box is in use** (a chat inside the idle-stop window) and
+  never otherwise, pings *and* runs one trivial statement on the kernel (`scripts/colab_keepalive.py
+  --touch`, one `wsl.exe` call per tick; a failed touch is written to the log). An idle box is left
+  to the idle stop, or to Colab.
 - No daemon, on purpose: a keep-alive that outlives the frontend is what turns a 2 h session into a
   24 h one. (The CLI's own daemon from `colab new` lives in WSL anyway, and WSL shuts its VM down
   seconds after the last `wsl.exe` exits, taking the daemon with it.) A box run by hand with no

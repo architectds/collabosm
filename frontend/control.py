@@ -36,13 +36,14 @@ Why an idle auto-stop, a keep-alive only while in use, and a stop on failure
     idle session left open overnight is a month of work, so `idle_stop_min`
     (default 20) after the last chat request the VM is stopped and the reason
     is written into the ledger. The opposite failure is just as real: Colab
-    counts only the kernel (`colab exec`) and the CLI's keep-alive ping as use,
-    never chat through the tunnel, and it reclaimed a box whose service was up
-    within 25 minutes of the last exec. So while the box is in use -- a chat
-    inside that idle window -- it is kept alive every 3 minutes
-    (scripts/colab_keepalive.py), and never otherwise: no daemon, nothing that
-    outlives this process, and an idle box is left to the idle stop or to
-    Colab. A job that fails after `assign` is stopped too: `up` stops nothing
+    never counts chat through the tunnel as use, and it reclaimed boxes whose
+    service was up 22-25 minutes after their last kernel execution -- one of
+    them 40 s after a successful keep-alive ping, so the ping alone is not use
+    either. So while the box is in use -- a chat inside that idle window -- it
+    is pinged *and* its kernel runs one trivial statement every 3 minutes
+    (scripts/colab_keepalive.py --touch), and never otherwise: no daemon,
+    nothing that outlives this process, and an idle box is left to the idle
+    stop or to Colab. A job that fails after `assign` is stopped too: `up` stops nothing
     on its way out, and a failed run whose VM keeps billing is worse than no
     run at all.
 
@@ -155,7 +156,7 @@ LINK_FAILS_TO_ASK_VM = 3     # then ask the VM where the service is now
 SESSIONS_EVERY_S = 300       # `colab sessions` while nothing is coupled
 NO_ADOPT_AFTER_STOP_S = 120  # a box we just stopped is not re-adopted while it goes
 BALANCE_EVERY_S = 300        # the account's real CU balance, from Colab
-KEEPALIVE_EVERY_S = 180      # while in use; Colab reclaimed an unheld box within 25 min
+KEEPALIVE_EVERY_S = 180      # ping + kernel touch while in use; reclaimed at 22-25 min without
 KEEPALIVE_FIRST_S = 30       # a fresh session's first ping, or a retry until one succeeds
 # `colab sessions` has been seen to leave out a live box for a few seconds (the CLI then
 # prunes its record: docs/MEASURED.md), so one listing without our box is not proof it
@@ -164,7 +165,8 @@ GONE_AFTER_S = 60
 
 NO_ENDPOINT = {"base": None, "key": None, "key_pending": False}
 NO_LINK = {"ok": None, "latency_ms": None, "fails": 0, "checked_at": None}
-NO_HOLD = {"holding": False, "at": None, "ok": None, "err": None}
+NO_HOLD = {"holding": False, "at": None, "ok": None, "err": None,
+           "touched_at": None, "touch_err": None}
 ENDPOINT_ID = re.compile(r"^[A-Za-z0-9-]+$")
 
 SESSION_LINE = re.compile(
@@ -1461,7 +1463,11 @@ class Control:
     def _keep_alive(self, ping: bool = True) -> None:
         """Tell Colab the box is in use, and put back the CLI's record of it if the
         CLI dropped it (scripts/colab_keepalive.py). ping=False only does the
-        second: coupling needs the record, and is not use."""
+        second: coupling needs the record, and is not use.
+
+        Use is the ping *and* a touch -- one trivial statement on the box's kernel.
+        The ping alone did not hold a box: on 2026-09-26 one was reclaimed 40 s after
+        a successful ping, 22 min after its last kernel execution."""
         with self.lock:
             if self.keepalive_busy:
                 return
@@ -1471,8 +1477,10 @@ class Control:
         try:
             if self.fake:
                 out = "KEEPALIVE ok %s" % (endpoint or "rehearsal-a100-hm-0")
+                if ping:
+                    out += "\nTOUCH ok 5 ms"
             else:
-                args = ([] if ping else ["--no-ping"]) + [self.session]
+                args = (["--touch"] if ping else ["--no-ping"]) + [self.session]
                 if endpoint and ENDPOINT_ID.match(endpoint):
                     args.append(endpoint)
                 # with the CLI's own interpreter, wherever the Colab guide found it
@@ -1481,15 +1489,24 @@ class Control:
             m = re.search(r"^KEEPALIVE( ok|_GONE|_ERROR)\b[ \t]*(.*)$", out, re.M)
             kind = m.group(1).strip() if m else "_ERROR"
             rest = (m.group(2) if m else (out.strip().splitlines() or ["no answer"])[-1]).strip()
+            # `TOUCH ok <ms> ms` | `TOUCH_ERROR <why>`, after an ok when asked to touch
+            t = re.search(r"^TOUCH( ok|_ERROR)\b[ \t]*(.*)$", out, re.M) if ping else None
+            touch_err = None
+            if ping and kind == "ok":
+                touch_err = ("no answer" if t is None
+                             else None if t.group(1) == " ok" else (t.group(2).strip() or "?")[:160])
             now = time.time()
             with self.lock:
                 # a box that stopped while the call was out gets no hold painted on it
                 current = self.state["stage"] == stage
                 hold = self.state["keepalive"]
                 before = (hold.get("ok"), hold.get("err"))
+                touch_before = hold.get("touch_err")
                 if kind == "ok":
                     if ping and current:
-                        hold.update(ok=True, err=None, at=now)
+                        hold.update(ok=True, err=None, at=now, touch_err=touch_err)
+                        if touch_err is None:
+                            hold["touched_at"] = now
                 elif current:
                     hold.update(ok=False, err="gone" if kind == "_GONE" else rest[:160])
                 after = (hold.get("ok"), hold.get("err"))
@@ -1506,6 +1523,11 @@ class Control:
                 self._log("!! keep-alive failed: %s" % rest[:160])
             elif kind == "ok" and ping and current and before[0] is not True:
                 self._log("[fe] keep-alive: Colab holds %s while it is in use" % self.session)
+            if kind == "ok" and ping and current and touch_err != touch_before:
+                # said once per change: a kernel that stops answering is the box
+                # Colab will reclaim in ~20 min, whatever the ping says
+                self._log("!! kernel touch failed: %s -- Colab may reclaim the box" % touch_err
+                          if touch_err else "[fe] kernel touch answers again")
         finally:
             with self.lock:
                 self.keepalive_busy = False

@@ -166,10 +166,22 @@ Two facts about the served model that cost real time to find:
 |---|---|---|
 | A100-80G High-RAM rate | **6.77 CU/h** | `/tun/m/ccu-info` `consumptionRateHourly` with this box as the account's only assignment (older notes: 7.52) |
 | unattended box reclaimed | **within 25 min** of the last `colab exec` | CLI history: last exec 02:35:37 UTC, assignment list empty at 03:00:05; the service was up and nothing sent a keep-alive |
+| box reclaimed **although pinged** | **22 min** after the last `colab exec`, **40 s** after a successful keep-alive ping | CLI history: last exec 21:07:24 UTC (end of provisioning), then only `download`s; the frontend pinged every 3 min while Codex traffic flowed (last ping ok 21:28:41); the tunnel answered 530/1033 from ~21:29:20; assignment list empty at 21:31:10 |
+| boxes that lived | 3.7 h and 7 h | kernel use at least every ~15 min, or a `colab console` open; the longest stretch any box survived with no kernel use was 28.8 min (2026-09-25) |
 | shape sent for a 40 GB card | none | 13 unpatched `assign` calls in `colab.log` came back `machineShape 0`; `shape=st` has never been sent |
 
-Chat through the tunnel does not count as use; the kernel and the keep-alive ping do. That is why
-the frontend keeps a box alive while it is in use (`docs/RUNBOOK.md`, cost guardrails).
+Chat through the tunnel does not count as use, and neither, on its own, does the keep-alive ping:
+the second box above was pinged every 3 minutes. The kernel does. So while a box is in use the
+frontend's keep-alive also runs one trivial statement on the kernel (`colab_keepalive.py --touch`,
+`docs/RUNBOOK.md`, cost guardrails). The touch is not yet proven on a live box: the next session
+running longer than 30 minutes on tunnel traffic alone is that test.
+
+The CLI's local session record goes missing about once an hour in every long run, the VM intact.
+The CLI drops it when `list_assignments` briefly leaves the endpoint out, and when a call to the VM
+is refused (401/404). An expired token would get exactly that refusal: the record keeps the
+runtime-proxy token it was registered with, and `RuntimeProxyInfo` carries `tokenExpiresInSeconds`.
+Which of the two causes it is not measured yet. The keep-alive now refreshes the record's url and
+token from the live assignment on every call, and re-registers a record that is already gone.
 
 ## Capacity
 
