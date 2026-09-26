@@ -1,59 +1,271 @@
 <!doctype html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
 <title>collabosm</title>
 <style>
-  :root{--rail:352px;--bg:#0b0e13;--panel:#10131a;--line:#232a36;--fg:#e8ecf3;--dim:#8b97a8}
-  *{box-sizing:border-box}
-  body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);
-       font:12.5px/1.42 ui-sans-serif,system-ui,Segoe UI,sans-serif}
-  header{display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
-  header b{font-weight:600;font-size:13px}
-  header .sp{flex:1}
-  header button{background:#1b2230;color:#cfe0ff;border:1px solid #2b3444;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:12px}
-  header button.stop{border-color:#7a3b3b;background:#2a1a1a;color:#ffc9c9}
-  header button[hidden]{display:none}
-  main{flex:1;display:grid;grid-template-columns:1fr var(--rail);min-height:0;transition:grid-template-columns .18s ease}
-  main.collapsed{grid-template-columns:1fr 0px}
-  iframe{border:0;width:100%;height:100%;background:#fff}
-  /* One column, one scrollbar: every section is stacked here. */
-  #rail{border-left:1px solid var(--line);background:var(--panel);overflow:auto;min-width:0;padding:8px 10px 20px}
-  main.collapsed #rail{display:none}
-  h4{margin:12px 0 6px;font-size:11px;letter-spacing:.06em;color:#6f7d90;text-transform:uppercase}
-  h4:first-child{margin-top:2px}
-  .row{display:flex;justify-content:space-between;gap:8px;padding:2px 0;color:#b9c4d4}
-  .row b{font-weight:500;color:#e8ecf3;text-align:right;word-break:break-all}
-  .card{border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin-bottom:6px;background:#161a23}
-  .card.warn{border-color:#7a5a2b;background:#211a10}
-  .card.ok{border-color:#2c5c3a;background:#111c16}
-  .meta{color:var(--dim);font-size:11.5px;margin-top:2px}
-  .btn{width:100%;margin-top:6px;padding:6px 9px;border-radius:7px;border:1px solid #2f6fd0;background:#1b2b45;color:#cfe0ff;cursor:pointer;font-size:12px}
-  .btn.go{border-color:#2f7a45;background:#1a3a26;color:#c8ffd8}
-  .btn.no{border-color:#3a3f4a;background:#1b1e26;color:#c7cedb}
-  .btn[disabled]{opacity:.5;cursor:default}
-  .bar{height:5px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:6px}
-  .bar>i{display:block;height:100%;background:#4c8dff;transition:width .4s}
-  .log{font:10.5px/1.35 Consolas,monospace;color:#7f8ea3;white-space:pre-wrap;word-break:break-all;max-height:150px;overflow:auto}
-  code{background:#0d1016;border:1px solid var(--line);border-radius:5px;padding:1px 4px;font-size:10.5px;word-break:break-all}
-  details{margin-top:4px}
-  summary{cursor:pointer;color:#8b97a8;font-size:11.5px;outline:none}
-  .pill{display:inline-block;font-size:10.5px;border:1px solid var(--line);border-radius:99px;padding:0 6px;color:#9fb4d8;margin-left:4px}
+  /* Colour-blocked on purpose: the panel (header + rail) is always the WebUI's
+     opposite. By day the WebUI is white, so the panel is warm ink; by night the
+     WebUI is near-black, so the panel turns to paper. Neither end is pure -- #fff
+     and #0a0a0a belong to the WebUI, and a panel that repeated them would read as
+     part of it. The warmth stays low (little chroma) so it sits beside the WebUI's
+     neutral greys instead of fighting them. The WebUI's own mode picks the side. */
+  :root {
+    --rail: 368px;
+    --page: #ffffff; --page-scheme: light;         /* the WebUI's page, behind the iframe */
+    --bg: #1b1a18; --raise: #24231f; --fg: #f3efe6; --muted: #aaa498; --faint: #7d786f;
+    --line: rgba(243, 239, 230, .09); --line-strong: rgba(243, 239, 230, .18);
+    --soft: rgba(243, 239, 230, .055); --ring: rgba(243, 239, 230, .18);
+    --inv-bg: #f3efe6; --inv-fg: #1b1a18;
+    --shadow: 0 18px 48px rgba(0, 0, 0, .30);
+    --cjk: "PingFang SC", "Hiragino Sans", "Microsoft YaHei UI", "Microsoft YaHei",
+           "Yu Gothic UI", "Noto Sans CJK SC";
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "JetBrains Mono", Menlo, monospace;
+    color-scheme: dark;
+  }
+  :root:lang(ja) {
+    --cjk: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo,
+           "Noto Sans JP", "Noto Sans CJK JP";
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: #0a0a0a; --page-scheme: dark;
+      --bg: #eeebe4; --raise: #f6f4ef; --fg: #1b1a18; --muted: #68635a; --faint: #8a847a;
+      --line: rgba(27, 26, 24, .10); --line-strong: rgba(27, 26, 24, .20);
+      --soft: rgba(27, 26, 24, .05); --ring: rgba(27, 26, 24, .16);
+      --inv-bg: #1b1a18; --inv-fg: #eeebe4;
+      --shadow: 0 18px 48px rgba(0, 0, 0, .45);
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page: #0a0a0a; --page-scheme: dark;
+    --bg: #eeebe4; --raise: #f6f4ef; --fg: #1b1a18; --muted: #68635a; --faint: #8a847a;
+    --line: rgba(27, 26, 24, .10); --line-strong: rgba(27, 26, 24, .20);
+    --soft: rgba(27, 26, 24, .05); --ring: rgba(27, 26, 24, .16);
+    --inv-bg: #1b1a18; --inv-fg: #eeebe4;
+    --shadow: 0 18px 48px rgba(0, 0, 0, .45);
+    color-scheme: light;
+  }
+  ::selection { background: var(--inv-bg); color: var(--inv-fg); }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--fg);
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+          Arial, var(--cjk), sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  button { font: inherit; color: inherit; }
+
+  /* ---- header -------------------------------------------------------- */
+  header {
+    flex: none; height: 52px; display: flex; align-items: center; gap: 12px;
+    padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); background: var(--bg);
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
+  .mark { width: 20px; height: 20px; border-radius: 6px; background: var(--fg); display: grid; place-items: center; flex: none; }
+  .mark::after { content: ""; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--bg); }
+  .status {
+    display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 42vw; height: 28px;
+    padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 12.5px;
+  }
+  .status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--faint); flex: none; }
+  .dot.on { background: var(--fg); border-color: var(--fg); }
+  .dot.busy { border-color: var(--fg); animation: breathe 1.4s ease-in-out infinite; }
+  @keyframes breathe { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 4px var(--ring); } }
+  .spacer { flex: 1; }
+  .seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line-strong); border-radius: 9px; }
+  .seg button {
+    height: 26px; min-width: 32px; padding: 0 8px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--muted); font-size: 12px; font-weight: 550; cursor: pointer;
+  }
+  .seg button:hover { color: var(--fg); }
+  .seg button[aria-pressed="true"] { background: var(--inv-bg); color: var(--inv-fg); }
+  .icon-btn {
+    width: 32px; height: 32px; display: grid; place-items: center; flex: none; cursor: pointer;
+    border: 1px solid var(--line-strong); border-radius: 9px; background: transparent;
+  }
+  .icon-btn:hover { border-color: var(--fg); }
+
+  /* ---- buttons and small parts --------------------------------------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
+    height: 36px; margin-top: 14px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 9px;
+    background: transparent; font-weight: 550; cursor: pointer; transition: border-color .15s, opacity .15s;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--fg); }
+  .btn.primary { background: var(--inv-bg); color: var(--inv-fg); border-color: var(--inv-bg); }
+  .btn.primary:hover:not(:disabled) { opacity: .86; }
+  .btn:disabled { opacity: .42; cursor: not-allowed; }
+  /* a disabled primary ("Running") is a quiet chip, not a half-transparent slab */
+  .btn.primary:disabled { opacity: 1; background: var(--soft); color: var(--muted); border-color: var(--line-strong); }
+  header .btn { width: auto; height: 32px; margin: 0; font-size: 12.5px; }
+  .tag {
+    display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border: 1px solid var(--line-strong);
+    border-radius: 999px; font-size: 10.5px; font-weight: 550; color: var(--muted);
+    letter-spacing: 0; text-transform: none; white-space: nowrap;
+  }
+  .tag.solid { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-fg); }
+  .mono { font-family: var(--mono); font-size: 11.5px; }
+
+  /* ---- layout -------------------------------------------------------- */
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--rail); }
+  main.collapsed { grid-template-columns: minmax(0, 1fr) 0; }
+  main.collapsed #rail { display: none; }
+  iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--page); color-scheme: var(--page-scheme); }
+  #rail {
+    min-width: 0; overflow-x: hidden; overflow-y: auto; border-left: 1px solid var(--line);
+    background: var(--bg); overscroll-behavior: contain; scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+  section { padding: 18px 20px 20px; border-bottom: 1px solid var(--line); }
+  section:last-child { border-bottom: 0; }
+  h2 {
+    margin: 0 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 11px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; color: var(--muted);
+  }
+  :lang(zh) h2, :lang(ja) h2 { letter-spacing: .05em; }
+  #toast {
+    position: sticky; top: 0; z-index: 3; margin: 0; padding: 11px 20px;
+    background: var(--inv-bg); color: var(--inv-fg); font-size: 12.5px;
+  }
+
+  /* ---- session ------------------------------------------------------- */
+  .state { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .state b { font-size: 24px; font-weight: 650; letter-spacing: -.025em; line-height: 1.2; }
+  .state .pct { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .steps {
+    list-style: none; margin: 16px 0 14px; padding: 0; position: relative;
+    display: grid; grid-template-columns: repeat(5, 1fr);
+  }
+  .steps::before, .steps::after { content: ""; position: absolute; top: 5px; left: 10%; height: 1px; }
+  .steps::before { width: 80%; background: var(--line-strong); }
+  .steps::after { width: calc(80% * var(--fill, 0)); background: var(--fg); transition: width .5s ease; }
+  .steps li {
+    position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 7px; font-size: 11px; color: var(--faint); text-align: center;
+  }
+  .steps li i { width: 11px; height: 11px; border-radius: 50%; background: var(--bg); border: 1.5px solid var(--line-strong); }
+  .steps li.done { color: var(--muted); }
+  .steps li.done i { background: var(--fg); border-color: var(--fg); }
+  .steps li.now { color: var(--fg); font-weight: 650; }
+  .steps li.now i { border-color: var(--fg); animation: breathe 1.4s ease-in-out infinite; }
+  .bar { height: 4px; border-radius: 999px; background: var(--soft); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--fg); transition: width .6s ease; }
+  .note { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
+  .note:empty { display: none; }
+  .fine { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+  .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; margin: 16px 0 0; font-size: 12.5px; }
+  .kv dt { color: var(--muted); }
+  .kv dd {
+    margin: 0; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+
+  .confirm { margin-top: 16px; padding: 16px; border: 1.5px solid var(--fg); border-radius: 14px; background: var(--raise); }
+  .confirm h3 { margin: 0; font-size: 14.5px; font-weight: 650; line-height: 1.4; }
+  .confirm .who { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; margin-top: 4px; font-size: 12.5px; }
+  .confirm .who span { color: var(--muted); }
+  .confirm .usd { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+  .confirm ul { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+  .confirm li + li { margin-top: 4px; }
+  .actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 16px; }
+  .actions .btn { margin: 0; }
+
+  .figs, .specs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+  .figs div, .specs div { padding: 8px 10px; border-radius: 9px; background: var(--soft); min-width: 0; }
+  .figs b, .specs b { display: block; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .figs small, .specs small { display: block; margin-top: 1px; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
+
+  /* ---- recipes ------------------------------------------------------- */
+  .recipe { padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; }
+  .recipe + .recipe { margin-top: 10px; }
+  .recipe.sel { border-color: var(--fg); }
+  .recipe .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .recipe .top b { font-size: 14px; font-weight: 650; }
+  .tags { display: inline-flex; gap: 6px; }
+  .recipe .sub { margin-top: 2px; color: var(--muted); font-size: 12px; }
+
+  /* ---- money, speed -------------------------------------------------- */
+  .figure { display: flex; align-items: baseline; gap: 8px; }
+  .figure b { font-size: 30px; font-weight: 650; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .figure span { color: var(--muted); font-size: 12px; }
+  .meter { height: 8px; margin-top: 12px; border-radius: 999px; background: var(--soft); overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
+  .meter i { display: block; height: 100%; width: 0; background: var(--fg); transition: width .5s ease; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 12px; }
+  .stat small { display: block; color: var(--muted); font-size: 11px; letter-spacing: .04em; }
+  .stat b { display: inline-block; margin-top: 4px; font-size: 22px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .stat span { margin-left: 4px; color: var(--muted); font-size: 12px; }
+
+  /* ---- connection, log ----------------------------------------------- */
+  details { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  details + details { margin-top: 12px; }
+  summary {
+    display: flex; align-items: center; justify-content: space-between; cursor: pointer;
+    list-style: none; color: var(--muted); font-size: 12.5px;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; font-family: var(--mono); }
+  details[open] summary::after { content: "\2212"; }
+  details pre, pre.log {
+    margin: 10px 0 0; padding: 10px 12px; max-height: 200px; overflow: auto; border-radius: 10px;
+    background: var(--soft); color: var(--muted); font: 11px/1.6 var(--mono);
+    white-space: pre-wrap; word-break: break-all;
+  }
+  pre.log { margin: 0; }
+
+  @media (max-width: 900px) {
+    main, main.collapsed { grid-template-columns: minmax(0, 1fr); }
+    #rail { position: fixed; top: 52px; right: 0; bottom: 0; z-index: 4; width: min(var(--rail), 100vw); box-shadow: var(--shadow); }
+    .brand span:last-child { display: none; }
+    .status { max-width: 34vw; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <b>collabosm</b>
-  <span class="meta" id="hdr">正在读取控制面…</span>
-  <span class="sp"></span>
-  <button id="stop" class="stop" hidden>停机</button>
-  <button id="toggle">收起 ⌘B</button>
+  <div class="brand"><span class="mark" aria-hidden="true"></span><span>collabosm</span></div>
+  <div class="status" id="status"><i class="dot" id="dot" aria-hidden="true"></i><span id="status-text"></span></div>
+  <span class="tag solid" id="rehearsal" hidden></span>
+  <span class="spacer"></span>
+  <div class="seg" id="langs" role="group">
+    <button type="button" data-lang="en" lang="en">EN</button>
+    <button type="button" data-lang="zh" lang="zh-CN">中</button>
+    <button type="button" data-lang="ja" lang="ja">日</button>
+  </div>
+  <button type="button" class="btn primary" id="stop" data-act="stop" hidden>
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="currentColor"/></svg>
+    <span id="stop-label"></span>
+  </button>
+  <button type="button" class="icon-btn" id="toggle">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M10 2.5v11"/></svg>
+  </button>
 </header>
 <main id="main">
   <iframe id="ui" src="/?embed=1" title="collabosm chat" allow="clipboard-write; clipboard-read"></iframe>
-  <aside id="rail"><div id="body"></div></aside>
+  <aside id="rail">
+    <p id="toast" role="status" aria-live="polite" hidden></p>
+    <section id="s-session"></section>
+    <section id="s-recipes"></section>
+    <section id="s-money"></section>
+    <section id="s-speed"></section>
+    <section id="s-conn"></section>
+    <section id="s-log"></section>
+  </aside>
 </main>
 <script>
+'use strict';
 // The upstream WebUI registers a service worker at scope "/" (workbox, sw.js).
 // A shell cached by an older build is how a stale injected panel came back once
 // -- a second copy of this rail inside the iframe. Drop both on load: the files
@@ -62,142 +274,732 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister()));
   if (window.caches) caches.keys().then((ks) => ks.forEach((k) => caches.delete(k)));
 }
-let st = null;
-const $ = (id) => document.getElementById(id);
-const fmt = (n, d) => (n === null || n === undefined) ? '—' : Number(n).toFixed(d === undefined ? 1 : d);
-const esc = (s) => String(s === null || s === undefined ? '' : s)
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const clk = (s) => (s === null || s === undefined) ? '—'
-  : Math.floor(s / 60) + ':' + String(Math.max(0, s % 60)).padStart(2, '0');
-const BUSY = ['requesting', 'uploading', 'bootstrapping', 'loading', 'stopping'];
-const row = (k, v) => '<div class="row"><span>' + k + '</span><b>' + v + '</b></div>';
 
-$('toggle').onclick = () => {
-  const m = $('main');
-  m.classList.toggle('collapsed');
-  $('toggle').textContent = m.classList.contains('collapsed') ? '展开 ⌘B' : '收起 ⌘B';
+// Every word the rail shows. control.py sends codes and numbers only: a note is
+// {k, a}, and an answer carries `code`.
+const I18N = {
+  en: {
+    'hdr.loading': 'Reading the control plane…',
+    'hdr.unreachable': 'Control plane unreachable',
+    'badge.rehearsal': 'Rehearsal · nothing billed',
+    'btn.stop': 'Stop',
+    'toggle.hide': 'Hide panel (Ctrl/⌘ B)',
+    'toggle.show': 'Show panel (Ctrl/⌘ B)',
+    'lang.label': 'Language',
+    'sec.session': 'Session', 'sec.recipes': 'Card & recipe', 'sec.money': 'Money',
+    'sec.speed': 'Speed', 'sec.conn': 'Connection', 'sec.log': 'Log',
+    'stage.idle': 'No card', 'stage.requesting': 'Requesting', 'stage.uploading': 'Uploading',
+    'stage.bootstrapping': 'Installing', 'stage.loading': 'Loading', 'stage.ready': 'Ready',
+    'stage.stopping': 'Stopping', 'stage.stopped': 'Stopped', 'stage.failed': 'Failed',
+    'stage.attached': 'External endpoint',
+    'step.requesting': 'Request', 'step.uploading': 'Upload', 'step.bootstrapping': 'Install',
+    'step.loading': 'Load', 'step.ready': 'Ready',
+    'row.model': 'Model', 'row.endpoint': 'Endpoint', 'row.key': 'API key',
+    'key.held': 'held by the proxy', 'key.pending': 'reading…', 'key.none': 'not read',
+    'row.idle': 'Idle stop in', 'row.uptime': 'Running for',
+    'btn.stopbill': 'Stop — end billing', 'btn.detach': 'Detach',
+    'btn.stopagain': 'Run stop again (down.sh)', 'btn.stopstale': 'Stop and close the ledger',
+    'attached.body': 'We did not start it, so it is never billed or auto-stopped. Restart the frontend without --external-endpoint to request your own card.',
+    'confirm.head': 'Billing starts the moment you press Start',
+    'confirm.cuph': 'CU per hour', 'confirm.eta': 'min to ready', 'confirm.need': 'CU to load',
+    'confirm.usd': '≈ ${usd} per hour',
+    'confirm.load': 'The load alone costs about {need} CU. Switching recipes is another load.',
+    'confirm.stops': 'Stops by itself after {idle} min idle, and after {max} h in any case.',
+    'confirm.budget': 'Budget {budget} CU this month: {left} left now, about {after} after this start.',
+    'btn.go': 'Start — billing begins', 'btn.cancel': 'Cancel',
+    'recipe.pick': 'Select and start', 'recipe.running': 'Running',
+    'tag.current': 'Current', 'tag.unverified': 'Unverified',
+    'spec.cuph': 'CU / h', 'spec.vram': 'GB VRAM', 'spec.eta': 'min to ready',
+    'money.used': 'CU used this month', 'money.left': '{left} of {budget} CU left',
+    'row.session': 'This session', 'row.idlestop': 'Idle auto-stop', 'row.ceiling': 'Session ceiling',
+    'unit.min': '{n} min', 'unit.h': '{n} h',
+    'speed.ref': 'Reference', 'speed.live': 'Live',
+    'speed.where': 'Measured by this repo on {date} on an {card}, not in this session.',
+    'speed.gcs': 'Prefill reaches {n} t/s at gcs 8192.',
+    'row.cli': 'Colab CLI', 'row.wsl': 'WSL distro', 'row.billing': 'Billing instances',
+    'billing.unknown': 'not probed',
+    'cli.ok': 'found', 'cli.missing': 'missing', 'cli.unknown': 'checking…', 'cli.rehearsal': 'rehearsal',
+    'det.command': 'Command it runs', 'det.command.none': 'Generated when you first pick a recipe.',
+    'det.billing': 'Raw billing output', 'det.billing.none': 'Not probed yet.',
+    'log.empty': 'Nothing yet.',
+    'note.idle.pick': 'No recipe yet. Picking one starts billing, so the numbers come first.',
+    'note.attached': 'External endpoint attached: never billed, never auto-stopped.',
+    'note.stage.requesting': 'Requesting a Colab instance and checking its shape. A 40 GB draw is returned automatically (~0.13 CU).',
+    'note.stage.uploading': 'Uploading api_server, bootstrap and serve to /content.',
+    'note.stage.bootstrapping': 'Installing the ExLlamaV3 runtime and pulling ~100 GiB of weights from Hugging Face.',
+    'note.stage.loading': 'Writing ~63.6 GiB into VRAM and building the KV page table and n-gram table.',
+    'note.box': 'Instance verified: {box}',
+    'note.waiting': 'Waiting for the endpoint; switches over as soon as it is healthy.',
+    'note.vm': 'VM: {vm}',
+    'note.vram': 'VRAM {used} / {total} MiB',
+    'note.ready.fetching': 'Healthy. Fetching the tunnel address and key.',
+    'note.ready': 'Service healthy.',
+    'note.raw': '{text}',
+    'note.stopping': 'Stopping ({reason}).',
+    'note.stopped': 'Stopped ({reason}). This session cost about {cu} CU.',
+    'note.detached': 'Detached from the external endpoint. There was no instance to stop.',
+    'note.ledger.stale': 'The ledger holds a session that was never closed: the frontend probably exited with a box up, and it may still be billing. Stop runs down.sh and closes it.',
+    'note.fail.spawn': 'Could not launch the command: {err}.',
+    'note.fail.read': 'Reading the job log failed: {err}.',
+    'note.fail.noready': 'up.sh exited cleanly but never reported READY. See the log.',
+    'note.fail.exit': 'up.sh exited with {rc}: {why}',
+    'autostop.running': ' Stopping the box so a failed run does not keep billing…',
+    'autostop.done': ' The box was stopped automatically (down.sh).',
+    'vm.probing': 'checking the instance', 'vm.runtime': 'installing the ExLlamaV3 runtime',
+    'vm.weights': 'pulling weights from Hugging Face', 'vm.env': 'writing the launch environment',
+    'vm.bootstrapped': 'bootstrap done, starting the model server',
+    'vm.loading': 'loading the model into VRAM', 'vm.ready': 'model server healthy',
+    'vm.serve_failed': 'the model server failed to start',
+    'vm.serve_timeout': 'the model server never became healthy',
+    'vm.ready_no_tunnel': 'healthy, but the tunnel has no URL',
+    'exit.1': 'upload or bootstrap failed. See the log below.',
+    'exit.2': 'bad arguments.',
+    'exit.3': 'the server-side instance limit is reached. Stop another session first.',
+    'exit.4': 'assign was refused. The account may not be eligible for an A100.',
+    'exit.5': 'cannot read assignments. The CLI may need to log in again.',
+    'exit.6': 'drew a 40 GB standard card, which was returned and stopped (~0.13 CU). Press again to redraw.',
+    'exit.7': 'timed out waiting for the endpoint (50 min by default).',
+    'exit.8': 'the model server did not come up. See /content/serve.log.',
+    'exit.9': 'healthy on the VM, but the tunnel published no URL. See /content/tunnel.log.',
+    'exit.other': 'see the log.',
+    'reason.manual': 'manual', 'reason.idle': 'idle', 'reason.max_hours': 'session ceiling',
+    'reason.job_timeout': 'job timeout', 'reason.failed': 'failed', 'reason.stale': 'unclosed session',
+    'foot.control': 'Control plane: WSL → colab CLI → restore.py → up.sh',
+    'foot.external': 'External endpoint {base}; no instance was requested from this machine.',
+    'foot.billing': 'Billing started: {card} · {cuph} CU/h',
+    'foot.stopped': 'Stopped ({reason}). The control plane is up; the VM is not.',
+    'foot.failed': 'Failed. This attempt cost about {cu} CU.',
+    'code.unknown_recipe': 'No such recipe.',
+    'code.attached': 'Attached to an external endpoint ({base}). Restart the frontend without --external-endpoint to request your own card.',
+    'code.busy': 'Busy: {stage}.',
+    'code.already': 'This recipe is already running.',
+    'code.stop_first': 'An instance is already running. Stop it before switching recipes; a switch is a full reload.',
+    'code.stale_ledger': 'An earlier session was never closed. Press Stop first so it is stopped and accounted for.',
+    'code.budget': 'Only {left} CU left this month, below this start’s estimate of {need} CU.',
+    'code.nothing_to_stop': 'Nothing is billing right now.',
+    'code.already_stopping': 'Already stopping.',
+    'code.detached': 'Detached from the external endpoint.',
+    'code.error': 'Request failed: {err}',
+  },
+  zh: {
+    'hdr.loading': '正在读取控制面…',
+    'hdr.unreachable': '控制面不可达',
+    'badge.rehearsal': '演练 · 不计费',
+    'btn.stop': '停机',
+    'toggle.hide': '收起面板（Ctrl/⌘ B）',
+    'toggle.show': '展开面板（Ctrl/⌘ B）',
+    'lang.label': '语言',
+    'sec.session': '本会话', 'sec.recipes': '卡与配方', 'sec.money': '费用',
+    'sec.speed': '速度', 'sec.conn': '连接', 'sec.log': '日志',
+    'stage.idle': '无卡无模型', 'stage.requesting': '申请中', 'stage.uploading': '上传工具包',
+    'stage.bootstrapping': '安装与下载', 'stage.loading': '写入显存', 'stage.ready': '已就绪',
+    'stage.stopping': '正在停机', 'stage.stopped': '已停机', 'stage.failed': '失败',
+    'stage.attached': '外部端点',
+    'step.requesting': '申请', 'step.uploading': '上传', 'step.bootstrapping': '安装',
+    'step.loading': '载入', 'step.ready': '就绪',
+    'row.model': '模型', 'row.endpoint': '端点', 'row.key': '密钥',
+    'key.held': '代理持有', 'key.pending': '读取中…', 'key.none': '未读到',
+    'row.idle': '空闲停机倒计时', 'row.uptime': '已运行',
+    'btn.stopbill': '停机（停止计费）', 'btn.detach': '断开',
+    'btn.stopagain': '再停一次（down.sh）', 'btn.stopstale': '停机并关账',
+    'attached.body': '这个端点不是我们启动的，所以既不计费，也不会被自动停机。要申请自己的卡，就不带 --external-endpoint 重启前端。',
+    'confirm.head': '点“开始”的那一刻就开始计费',
+    'confirm.cuph': 'CU / 小时', 'confirm.eta': '分钟就绪', 'confirm.need': 'CU 载入成本',
+    'confirm.usd': '≈ 每小时 ${usd}',
+    'confirm.load': '光是载入就要约 {need} CU；换一次配方就是再载入一次。',
+    'confirm.stops': '空闲 {idle} 分钟自动停机，连续最长 {max} 小时。',
+    'confirm.budget': '本月预算 {budget} CU，现在剩 {left}；启动后预计剩 {after}。',
+    'btn.go': '开始（现在开始计费）', 'btn.cancel': '取消',
+    'recipe.pick': '选它并启动', 'recipe.running': '运行中',
+    'tag.current': '当前', 'tag.unverified': '未实测',
+    'spec.cuph': 'CU / 小时', 'spec.vram': 'GB 显存', 'spec.eta': '分钟就绪',
+    'money.used': '本月已用 CU', 'money.left': '剩 {left} / {budget} CU',
+    'row.session': '本次会话', 'row.idlestop': '空闲自动停机', 'row.ceiling': '连续上限',
+    'unit.min': '{n} 分钟', 'unit.h': '{n} 小时',
+    'speed.ref': '参考', 'speed.live': '实测',
+    'speed.where': '本仓库 {date} 在 {card} 上的实测，不是本次会话的数字。',
+    'speed.gcs': 'gcs 8192 时 prefill 可达 {n} t/s。',
+    'row.cli': 'Colab CLI', 'row.wsl': 'WSL 发行版', 'row.billing': '在计费实例',
+    'billing.unknown': '未探测',
+    'cli.ok': '已找到', 'cli.missing': '未找到', 'cli.unknown': '检查中…', 'cli.rehearsal': '演练',
+    'det.command': '要跑的命令', 'det.command.none': '第一次选配方时生成。',
+    'det.billing': '服务端账目原文', 'det.billing.none': '还没探测。',
+    'log.empty': '暂无。',
+    'note.idle.pick': '还没选配方。选一个就开始计费，所以先把数字给你看。',
+    'note.attached': '外部端点已接上：不计费，也不会被自动停机。',
+    'note.stage.requesting': '向 Colab 申请实例并校验形状；抽到 40 GB 会自动退回（约 0.13 CU）。',
+    'note.stage.uploading': '上传 api_server / bootstrap / serve 到 /content。',
+    'note.stage.bootstrapping': '安装 ExLlamaV3 运行时，并从 Hugging Face 拉约 100 GiB 权重。',
+    'note.stage.loading': '把约 63.6 GiB 写进显存，建 KV 页表与 n-gram 表。',
+    'note.box': '实例校验：{box}',
+    'note.waiting': '正在等待端点，一健康就切换。',
+    'note.vm': 'VM：{vm}',
+    'note.vram': '显存 {used} / {total} MiB',
+    'note.ready.fetching': '服务已健康，正在取隧道地址与密钥。',
+    'note.ready': '服务已健康。',
+    'note.raw': '{text}',
+    'note.stopping': '正在停机（{reason}）。',
+    'note.stopped': '已停机（{reason}），这次约 {cu} CU。',
+    'note.detached': '已断开外部端点（没有实例可以停）。',
+    'note.ledger.stale': '账本里有一个没关的会话：前端大概是在有卡时退出的，VM 可能还在计费。点“停机”会跑 down.sh 并关账。',
+    'note.fail.spawn': '启动不了命令：{err}。',
+    'note.fail.read': '读日志失败：{err}。',
+    'note.fail.noready': 'up.sh 正常退出，但没等到 READY（看日志）。',
+    'note.fail.exit': 'up.sh 退出码 {rc}：{why}',
+    'autostop.running': '正在停机，免得失败的实例继续计费…',
+    'autostop.done': '已自动停机（down.sh）。',
+    'vm.probing': '校验实例', 'vm.runtime': '安装 ExLlamaV3 运行时',
+    'vm.weights': '从 Hugging Face 拉权重', 'vm.env': '写入启动环境',
+    'vm.bootstrapped': '引导完成，正在起模型服务',
+    'vm.loading': '载入模型到显存', 'vm.ready': '模型服务已健康',
+    'vm.serve_failed': '模型服务启动失败', 'vm.serve_timeout': '模型服务迟迟不健康',
+    'vm.ready_no_tunnel': '服务健康，但隧道没有地址',
+    'exit.1': '上传或引导失败，看下面的日志。',
+    'exit.2': '参数错误。',
+    'exit.3': '服务端实例数已到上限，先停掉别的会话。',
+    'exit.4': 'assign 请求被拒（账号可能没有 A100 资格）。',
+    'exit.5': '读不到 assignments，CLI 可能需要重新登录。',
+    'exit.6': '抽到 40 GB 标准卡，已自动退回并停机（约 0.13 CU）；再点一次重抽。',
+    'exit.7': '等待端点超时（默认 50 分钟）。',
+    'exit.8': '模型服务没起来，看 /content/serve.log。',
+    'exit.9': 'VM 上服务健康，但隧道没给出地址，看 /content/tunnel.log。',
+    'exit.other': '看日志。',
+    'reason.manual': '手动', 'reason.idle': '空闲', 'reason.max_hours': '达到连续上限',
+    'reason.job_timeout': '任务超时', 'reason.failed': '失败', 'reason.stale': '未关的会话',
+    'foot.control': '控制面：WSL → colab CLI → restore.py → up.sh',
+    'foot.external': '外部端点 {base}；本机没有申请实例。',
+    'foot.billing': '计费已开始：{card} · {cuph} CU/h',
+    'foot.stopped': '已停机（{reason}）。控制面在，VM 不在。',
+    'foot.failed': '失败，这次约花了 {cu} CU。',
+    'code.unknown_recipe': '没有这个配方。',
+    'code.attached': '现在接的是外部端点 {base}。要申请自己的卡，就不带 --external-endpoint 重启前端。',
+    'code.busy': '正在忙：{stage}。',
+    'code.already': '这个配方已经在运行。',
+    'code.stop_first': '已经有一个实例在跑。先停机再换配方（换配方就是一次重新载入）。',
+    'code.stale_ledger': '有一个之前的会话没关。先点“停机”，把它停掉并记账。',
+    'code.budget': '本月 CU 只剩 {left}，低于这次启动的估算 {need} CU。',
+    'code.nothing_to_stop': '现在没有在计费的实例。',
+    'code.already_stopping': '已经在停机。',
+    'code.detached': '已断开外部端点。',
+    'code.error': '请求失败：{err}',
+  },
+  ja: {
+    'hdr.loading': 'コントロールプレーンを読み込み中…',
+    'hdr.unreachable': 'コントロールプレーンに接続できません',
+    'badge.rehearsal': 'リハーサル・課金なし',
+    'btn.stop': '停止',
+    'toggle.hide': 'パネルを閉じる（Ctrl/⌘ B）',
+    'toggle.show': 'パネルを開く（Ctrl/⌘ B）',
+    'lang.label': '言語',
+    'sec.session': 'セッション', 'sec.recipes': 'カードとレシピ', 'sec.money': '費用',
+    'sec.speed': '速度', 'sec.conn': '接続', 'sec.log': 'ログ',
+    'stage.idle': 'カードなし', 'stage.requesting': '申請中', 'stage.uploading': 'アップロード中',
+    'stage.bootstrapping': 'インストール中', 'stage.loading': 'ロード中', 'stage.ready': '準備完了',
+    'stage.stopping': '停止中', 'stage.stopped': '停止済み', 'stage.failed': '失敗',
+    'stage.attached': '外部エンドポイント',
+    'step.requesting': '申請', 'step.uploading': '転送', 'step.bootstrapping': '導入',
+    'step.loading': '読込', 'step.ready': '完了',
+    'row.model': 'モデル', 'row.endpoint': 'エンドポイント', 'row.key': 'API キー',
+    'key.held': 'プロキシが保持', 'key.pending': '取得中…', 'key.none': '未取得',
+    'row.idle': 'アイドル停止まで', 'row.uptime': '稼働時間',
+    'btn.stopbill': '停止（課金を終了）', 'btn.detach': '切断',
+    'btn.stopagain': 'もう一度停止（down.sh）', 'btn.stopstale': '停止して記帳を閉じる',
+    'attached.body': 'このエンドポイントは私たちが起動したものではないため、課金も自動停止もしません。自分のカードを使うには --external-endpoint を付けずにフロントエンドを再起動してください。',
+    'confirm.head': '「開始」を押した瞬間から課金が始まります',
+    'confirm.cuph': 'CU / 時間', 'confirm.eta': '分で準備完了', 'confirm.need': 'CU（ロード費用）',
+    'confirm.usd': '≈ 1 時間あたり ${usd}',
+    'confirm.load': 'ロードだけで約 {need} CU かかります。レシピを切り替えるたびに再ロードです。',
+    'confirm.stops': '{idle} 分間アイドルで自動停止、連続最長 {max} 時間。',
+    'confirm.budget': '今月の予算 {budget} CU、残り {left}。起動後は約 {after} の見込み。',
+    'btn.go': '開始（課金開始）', 'btn.cancel': 'キャンセル',
+    'recipe.pick': '選んで起動', 'recipe.running': '稼働中',
+    'tag.current': '選択中', 'tag.unverified': '未検証',
+    'spec.cuph': 'CU / 時', 'spec.vram': 'GB VRAM', 'spec.eta': '分で準備完了',
+    'money.used': '今月の使用 CU', 'money.left': '残り {left} / {budget} CU',
+    'row.session': '今回のセッション', 'row.idlestop': 'アイドル自動停止', 'row.ceiling': '連続上限',
+    'unit.min': '{n} 分', 'unit.h': '{n} 時間',
+    'speed.ref': '参考値', 'speed.live': '実測',
+    'speed.where': '本リポジトリが {date} に {card} で実測した値です。このセッションの数値ではありません。',
+    'speed.gcs': 'gcs 8192 では prefill が {n} t/s に達します。',
+    'row.cli': 'Colab CLI', 'row.wsl': 'WSL ディストリ', 'row.billing': '課金中のインスタンス',
+    'billing.unknown': '未確認',
+    'cli.ok': 'あり', 'cli.missing': 'なし', 'cli.unknown': '確認中…', 'cli.rehearsal': 'リハーサル',
+    'det.command': '実行するコマンド', 'det.command.none': '最初にレシピを選ぶと生成されます。',
+    'det.billing': 'サーバー側の課金出力', 'det.billing.none': 'まだ確認していません。',
+    'log.empty': 'まだありません。',
+    'note.idle.pick': 'レシピ未選択。選ぶと課金が始まるので、先に数字をお見せします。',
+    'note.attached': '外部エンドポイントに接続済み：課金なし、自動停止なし。',
+    'note.stage.requesting': 'Colab インスタンスを申請し、形状を確認しています。40 GB が当たった場合は自動で返却します（約 0.13 CU）。',
+    'note.stage.uploading': 'api_server / bootstrap / serve を /content にアップロード中。',
+    'note.stage.bootstrapping': 'ExLlamaV3 ランタイムを導入し、Hugging Face から約 100 GiB の重みを取得中。',
+    'note.stage.loading': '約 63.6 GiB を VRAM に書き込み、KV ページ表と n-gram 表を構築中。',
+    'note.box': 'インスタンス確認：{box}',
+    'note.waiting': 'エンドポイントを待機中。正常になり次第切り替えます。',
+    'note.vm': 'VM：{vm}',
+    'note.vram': 'VRAM {used} / {total} MiB',
+    'note.ready.fetching': '正常です。トンネルのアドレスとキーを取得中。',
+    'note.ready': 'サービス正常。',
+    'note.raw': '{text}',
+    'note.stopping': '停止中（{reason}）。',
+    'note.stopped': '停止しました（{reason}）。今回は約 {cu} CU。',
+    'note.detached': '外部エンドポイントから切断しました（停止するインスタンスはありません）。',
+    'note.ledger.stale': '閉じられていないセッションが記帳に残っています。カード稼働中にフロントエンドが終了した可能性があり、まだ課金中かもしれません。「停止」で down.sh を実行し、記帳を閉じます。',
+    'note.fail.spawn': 'コマンドを起動できません：{err}。',
+    'note.fail.read': 'ジョブログの読み取りに失敗：{err}。',
+    'note.fail.noready': 'up.sh は正常終了しましたが、READY になりませんでした（ログ参照）。',
+    'note.fail.exit': 'up.sh 終了コード {rc}：{why}',
+    'autostop.running': '失敗したまま課金が続かないよう、インスタンスを停止中…',
+    'autostop.done': 'インスタンスは自動で停止しました（down.sh）。',
+    'vm.probing': 'インスタンスを確認中', 'vm.runtime': 'ExLlamaV3 ランタイムを導入中',
+    'vm.weights': 'Hugging Face から重みを取得中', 'vm.env': '起動環境を書き込み中',
+    'vm.bootstrapped': 'ブートストラップ完了、モデルサーバーを起動中',
+    'vm.loading': 'モデルを VRAM に読み込み中', 'vm.ready': 'モデルサーバー正常',
+    'vm.serve_failed': 'モデルサーバーの起動に失敗', 'vm.serve_timeout': 'モデルサーバーが正常になりません',
+    'vm.ready_no_tunnel': '正常だがトンネル URL なし',
+    'exit.1': 'アップロードまたはブートストラップに失敗しました。下のログを参照してください。',
+    'exit.2': '引数エラー。',
+    'exit.3': 'サーバー側のインスタンス数が上限です。先に別のセッションを停止してください。',
+    'exit.4': '割り当てが拒否されました。アカウントに A100 の資格がない可能性があります。',
+    'exit.5': '割り当てを読めません。CLI の再ログインが必要かもしれません。',
+    'exit.6': '40 GB 標準カードが当たったため、返却して停止しました（約 0.13 CU）。もう一度押すと再抽選します。',
+    'exit.7': 'エンドポイント待ちがタイムアウトしました（既定 50 分）。',
+    'exit.8': 'モデルサーバーが起動しませんでした。/content/serve.log を参照してください。',
+    'exit.9': 'VM 上では正常ですが、トンネルが URL を公開しませんでした。/content/tunnel.log を参照してください。',
+    'exit.other': 'ログを参照してください。',
+    'reason.manual': '手動', 'reason.idle': 'アイドル', 'reason.max_hours': '連続上限',
+    'reason.job_timeout': 'ジョブタイムアウト', 'reason.failed': '失敗', 'reason.stale': '未クローズのセッション',
+    'foot.control': 'コントロールプレーン：WSL → colab CLI → restore.py → up.sh',
+    'foot.external': '外部エンドポイント {base}。このマシンからはインスタンスを申請していません。',
+    'foot.billing': '課金開始：{card} · {cuph} CU/h',
+    'foot.stopped': '停止しました（{reason}）。コントロールプレーンは稼働中、VM は停止。',
+    'foot.failed': '失敗。今回は約 {cu} CU かかりました。',
+    'code.unknown_recipe': 'そのレシピはありません。',
+    'code.attached': '外部エンドポイント（{base}）に接続中です。自分のカードを使うには --external-endpoint を付けずにフロントエンドを再起動してください。',
+    'code.busy': '処理中：{stage}。',
+    'code.already': 'このレシピはすでに稼働中です。',
+    'code.stop_first': 'すでにインスタンスが稼働中です。レシピを切り替える前に停止してください（切り替え＝再ロード）。',
+    'code.stale_ledger': '以前のセッションが閉じられていません。先に「停止」を押して、停止と記帳を済ませてください。',
+    'code.budget': '今月の残りは {left} CU で、今回の起動見積もり {need} CU を下回っています。',
+    'code.nothing_to_stop': '現在、課金中のインスタンスはありません。',
+    'code.already_stopping': 'すでに停止中です。',
+    'code.detached': '外部エンドポイントから切断しました。',
+    'code.error': 'リクエスト失敗：{err}',
+  },
 };
-addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); $('toggle').click(); } });
+const HTML_LANG = { en: 'en', zh: 'zh-CN', ja: 'ja' };
+const LOCALE = { en: 'en-US', zh: 'zh-CN', ja: 'ja-JP' };
+const STEPS = ['requesting', 'uploading', 'bootstrapping', 'loading', 'ready'];
+const BUSY = ['requesting', 'uploading', 'bootstrapping', 'loading', 'stopping'];
+const QUIET = ['confirm_required', 'started', 'cancelled', 'stopping'];
 
-async function refresh() {
-  try { st = await (await fetch('/control/status', { cache: 'no-store' })).json(); render(); }
-  catch (e) { $('hdr').textContent = '控制面不可达：' + e; }
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let lang = pickLang();
+let st = null;          // the last /control/status
+let down = null;        // why the control plane could not be read, when it could not
+let pending = false;    // a POST is in flight: every action waits for it (Start bills)
+const drawn = {};       // section id -> markup it holds; unchanged sections are left alone,
+                        // so buttons keep focus and <details> stay open between polls
+const openDetails = new Set();
+let toastTimer = null;
+
+function pickLang() {
+  let saved = null;
+  try { saved = localStorage.getItem('collabosm.lang'); } catch (e) { /* storage blocked */ }
+  if (saved && I18N[saved]) return saved;
+  const nav = String(navigator.language || '').toLowerCase();
+  return nav.startsWith('zh') ? 'zh' : nav.startsWith('ja') ? 'ja' : 'en';
 }
-async function post(path, body) {
-  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(body || {}) });
-  let j = {}; try { j = await r.json(); } catch (e) {}
-  await refresh();
-  return j;
+
+function t(key, args, fallback) {
+  const s = I18N[lang][key] ?? I18N.en[key] ?? fallback ?? key;
+  return args ? s.replace(/\{(\w+)\}/g, (m, k) => (args[k] ?? m)) : s;
+}
+
+function num(n, digits) {
+  if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
+  const d = digits ?? 1;
+  return new Intl.NumberFormat(LOCALE[lang], { minimumFractionDigits: d, maximumFractionDigits: d })
+    .format(Number(n));
+}
+
+function clock(sec) {
+  if (sec === null || sec === undefined) return '—';
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const two = (x) => String(x).padStart(2, '0');
+  return h ? h + ':' + two(m) + ':' + two(s) : m + ':' + two(s);
+}
+
+// A note from control.py, worded in the current language.
+function words(n, prefix) {
+  if (!n || !n.k) return '';
+  const a = Object.assign({}, n.a || {});
+  if (a.reason !== undefined) a.reason = t('reason.' + a.reason, null, a.reason);
+  if (a.vm !== undefined) a.vm = t('vm.' + a.vm, null, a.vm);
+  if (n.k === 'fail.exit') a.why = t('exit.' + a.rc, null, t('exit.other'));
+  for (const k of ['cu', 'cuph']) if (typeof a[k] === 'number') a[k] = num(a[k], 2);
+  let s = t(prefix + n.k, a, n.k);
+  if (a.autostop === 'running' || a.autostop === 'done') s += t('autostop.' + a.autostop);
+  return s;
+}
+
+function stoppable(s) {
+  return (BUSY.includes(s.stage) && s.stage !== 'stopping') || s.stage === 'ready'
+    || s.stage === 'failed' || (s.ledger_open && (s.stage === 'idle' || s.stage === 'stopped'));
+}
+
+function btn(act, label, kind, attrs) {
+  return '<button type="button" class="btn ' + (kind || '') + '" data-act="' + act + '" '
+    + (attrs || '') + (pending ? ' disabled' : '') + '>' + esc(label) + '</button>';
+}
+
+function put(id, html) {
+  if (drawn[id] === html) return;
+  $(id).innerHTML = html;
+  drawn[id] = html;
+}
+
+// ---- header ------------------------------------------------------------ //
+function renderHeader() {
+  let cls = 'dot', label;
+  if (down) label = t('hdr.unreachable');
+  else if (!st) label = t('hdr.loading');
+  else {
+    const s = st.stage, name = t('stage.' + s, null, s);
+    if (s === 'ready' || s === 'attached') { cls += ' on'; label = name + ' · ' + (st.live_model || ''); }
+    else if (BUSY.includes(s)) {
+      cls += ' busy';
+      label = s === 'stopping' ? name : name + ' · ' + num(st.progress, 0) + '%';
+    } else label = name;
+  }
+  $('dot').className = cls;
+  if ($('status-text').textContent !== label) $('status-text').textContent = label;
+  $('status').title = label;
+  document.title = 'collabosm · ' + label;
+  $('rehearsal').hidden = !(st && st.fake);
+  $('rehearsal').textContent = t('badge.rehearsal');
+  $('stop').hidden = !(st && stoppable(st));
+  $('stop').disabled = pending;
+  $('stop-label').textContent = t('btn.stop');
+  for (const b of document.querySelectorAll('#langs button')) {
+    b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+  }
+  $('langs').setAttribute('aria-label', t('lang.label'));
+  const collapsed = $('main').classList.contains('collapsed');
+  $('toggle').title = t(collapsed ? 'toggle.show' : 'toggle.hide');
+  $('toggle').setAttribute('aria-label', $('toggle').title);
+  $('toggle').setAttribute('aria-expanded', String(!collapsed));
+}
+
+// ---- sections ---------------------------------------------------------- //
+function stepsHTML(s) {
+  const at = s === 'ready' ? STEPS.length : STEPS.indexOf(s);
+  const fill = s === 'ready' ? 1 : Math.max(0, at) / (STEPS.length - 1);
+  let h = '<ol class="steps" style="--fill:' + fill.toFixed(3) + '">';
+  STEPS.forEach((k, i) => {
+    const cls = i < at ? 'done' : i === at ? 'now' : '';
+    h += '<li class="' + cls + '"><i></i><span>' + esc(t('step.' + k)) + '</span></li>';
+  });
+  return h + '</ol>';
+}
+
+function confirmHTML(w) {
+  return '<div class="confirm" role="group" aria-label="' + esc(t('confirm.head')) + '">'
+    + '<h3>' + esc(t('confirm.head')) + '</h3>'
+    + '<div class="who"><b>' + esc(w.card) + '</b><span>' + esc(w.model) + '</span></div>'
+    + '<div class="figs">'
+    + '<div><b>' + num(w.cu_per_hour, 2) + '</b><small>' + esc(t('confirm.cuph')) + '</small></div>'
+    + '<div><b>~' + num(w.eta_min, 0) + '</b><small>' + esc(t('confirm.eta')) + '</small></div>'
+    + '<div><b>~' + num(w.cu_estimate, 1) + '</b><small>' + esc(t('confirm.need')) + '</small></div>'
+    + '</div>'
+    + '<p class="usd">' + esc(t('confirm.usd', { usd: num(w.usd_per_hour, 2) })) + '</p>'
+    + '<ul>'
+    + '<li>' + esc(t('confirm.load', { need: num(w.cu_estimate, 1) })) + '</li>'
+    + '<li>' + esc(t('confirm.stops', { idle: num(w.idle_stop_min, 0), max: num(w.max_session_h, 0) })) + '</li>'
+    + '<li>' + esc(t('confirm.budget', { budget: num(w.budget_cu, 0), left: num(w.cu_left, 1),
+                                          after: num(w.cu_left_after, 1) })) + '</li>'
+    + '</ul>'
+    + '<div class="actions">' + btn('go', t('btn.go'), 'primary') + btn('cancel', t('btn.cancel')) + '</div>'
+    + '</div>';
+}
+
+function endpointRows(ep) {
+  return '<dt>' + esc(t('row.model')) + '</dt><dd>' + esc(st.live_model || '—') + '</dd>'
+    + '<dt>' + esc(t('row.endpoint')) + '</dt><dd class="mono" title="' + esc(ep.base || '') + '">'
+    + esc(ep.base || '—') + '</dd>';
+}
+
+function sessionHTML() {
+  const s = st.stage, moving = BUSY.includes(s) && s !== 'stopping';
+  const ep = st.endpoint || {};
+  let h = '<h2>' + esc(t('sec.session')) + '</h2>'
+    + '<div class="state"><b>' + esc(t('stage.' + s, null, s)) + '</b>'
+    + (moving ? '<span class="pct" data-v="pct"></span>' : '') + '</div>';
+  if (moving || s === 'ready') h += stepsHTML(s);
+  if (moving) h += '<div class="bar"><i data-w="bar"></i></div>';
+  h += '<p class="note" data-v="note"></p>';
+  if (st.confirm) h += confirmHTML(st.confirm);
+  if (s === 'ready') {
+    const key = ep.key ? t('key.held') : ep.key_pending ? t('key.pending') : t('key.none');
+    h += '<dl class="kv">' + endpointRows(ep)
+      + '<dt>' + esc(t('row.key')) + '</dt><dd>' + esc(key) + '</dd>'
+      + '<dt>' + esc(t('row.idle')) + '</dt><dd data-v="idle"></dd>'
+      + '<dt>' + esc(t('row.uptime')) + '</dt><dd data-v="uptime"></dd></dl>'
+      + btn('stop', t('btn.stopbill'));
+  } else if (s === 'attached') {
+    h += '<dl class="kv">' + endpointRows(ep) + '</dl>'
+      + '<p class="fine">' + esc(t('attached.body')) + '</p>' + btn('stop', t('btn.detach'));
+  } else if (s === 'failed') {
+    h += btn('stop', t('btn.stopagain'));
+  } else if (st.ledger_open && (s === 'idle' || s === 'stopped')) {
+    h += btn('stop', t('btn.stopstale'), 'primary');
+  }
+  return h;
+}
+
+function recipesHTML() {
+  const s = st.stage;
+  const locked = pending || BUSY.includes(s) || s === 'ready' || s === 'attached' || !!st.confirm;
+  let h = '<h2>' + esc(t('sec.recipes')) + '</h2>';
+  for (const r of st.recipes || []) {
+    const sel = st.selected === r.id, running = s === 'ready' && sel;
+    const note = r.note ? (r.note[lang] || r.note.en || '') : '';
+    h += '<article class="recipe' + (sel ? ' sel' : '') + '">'
+      + '<div class="top"><b>' + esc(r.card) + '</b><span class="tags">'
+      + (sel ? '<span class="tag solid">' + esc(t('tag.current')) + '</span>' : '')
+      + (r.verified ? '' : '<span class="tag">' + esc(t('tag.unverified')) + '</span>')
+      + '</span></div>'
+      + '<div class="sub">' + esc(r.model) + ' · ' + esc(r.quant) + '</div>'
+      + '<div class="specs">'
+      + '<div><b>' + num(r.cu_per_hour, 2) + '</b><small>' + esc(t('spec.cuph')) + '</small></div>'
+      + '<div><b>' + num(r.vram_gb, 0) + '</b><small>' + esc(t('spec.vram')) + '</small></div>'
+      + '<div><b>~' + num(r.eta_min, 0) + '</b><small>' + esc(t('spec.eta')) + '</small></div>'
+      + '</div>'
+      + (note ? '<p class="fine">' + esc(note) + '</p>' : '')
+      + '<button type="button" class="btn' + (running ? ' primary' : '') + '" data-act="pick" data-r="'
+      + esc(r.id) + '"' + (locked ? ' disabled' : '') + '>'
+      + esc(t(running ? 'recipe.running' : 'recipe.pick')) + '</button>'
+      + '</article>';
+  }
+  return h;
+}
+
+function moneyHTML() {
+  return '<h2>' + esc(t('sec.money')) + '</h2>'
+    + '<div class="figure"><b data-v="used"></b><span>' + esc(t('money.used')) + '</span></div>'
+    + '<div class="meter"><i data-w="meter"></i></div>'
+    + '<p class="fine" data-v="left"></p>'
+    + '<dl class="kv">'
+    + '<dt>' + esc(t('row.session')) + '</dt><dd data-v="session"></dd>'
+    + '<dt>' + esc(t('row.idlestop')) + '</dt><dd>' + esc(t('unit.min', { n: num(st.idle_stop_min, 0) })) + '</dd>'
+    + '<dt>' + esc(t('row.ceiling')) + '</dt><dd>' + esc(t('unit.h', { n: num(st.max_session_h, 0) })) + '</dd>'
+    + '</dl>';
+}
+
+function speedHTML() {
+  // `metrics` is a live measurement when something takes one; until then these are
+  // the repo's reference numbers, and they are labelled as exactly that.
+  const live = st.metrics, m = st.measured || {}, src = live || m;
+  return '<h2>' + esc(t('sec.speed')) + '<span class="tag">' + esc(t(live ? 'speed.live' : 'speed.ref'))
+    + '</span></h2>'
+    + '<div class="pair">'
+    + '<div class="stat"><small>PREFILL</small><b>' + num(src.prefill, 0) + '</b><span>t/s</span></div>'
+    + '<div class="stat"><small>DECODE</small><b>' + num(src.decode, 1) + '</b><span>t/s</span></div>'
+    + '</div>'
+    + (live ? '' : '<p class="fine">' + esc(t('speed.where', { date: m.measured_on || '', card: m.card || '' }))
+        + ' ' + esc(t('speed.gcs', { n: num(m.prefill_gcs8192, 0) })) + '</p>');
+}
+
+function details(id, summary, body) {
+  return '<details data-d="' + id + '"' + (openDetails.has(id) ? ' open' : '') + '><summary>'
+    + esc(summary) + '</summary><pre>' + esc(body) + '</pre></details>';
+}
+
+function connHTML() {
+  const cli = st.cli || {}, bill = st.billing || {};
+  const billing = (bill.count === null || bill.count === undefined) ? t('billing.unknown') : num(bill.count, 0);
+  return '<h2>' + esc(t('sec.conn')) + '</h2>'
+    + '<dl class="kv">'
+    + '<dt>' + esc(t('row.cli')) + '</dt><dd>' + esc(t('cli.' + (cli.colab || 'unknown'), null, cli.colab)) + '</dd>'
+    + '<dt>' + esc(t('row.wsl')) + '</dt><dd>' + esc(cli.wsl || '—') + '</dd>'
+    + '<dt>' + esc(t('row.billing')) + '</dt><dd>' + esc(billing) + '</dd>'
+    + '</dl>'
+    + details('cmd', t('det.command'), cli.command || t('det.command.none'))
+    + details('bill', t('det.billing'), bill.raw || t('det.billing.none'));
+}
+
+function logHTML() {
+  return '<h2>' + esc(t('sec.log')) + '</h2><pre class="log" data-v="log"></pre>'
+    + '<p class="fine" data-v="foot"></p>';
+}
+
+// Values that change every poll are bound into the drawn markup, not drawn into it.
+function bindValues() {
+  const v = {
+    pct: num(st.progress, 0) + '%',
+    note: words(st.note, 'note.'),
+    idle: st.idle_left_s === null || st.idle_left_s === undefined ? '—' : clock(st.idle_left_s),
+    uptime: clock((st.session_hours || 0) * 3600),
+    used: num(st.cu_used, 2),
+    left: t('money.left', { left: num(st.cu_left, 1), budget: num(st.budget_cu, 0) }),
+    session: t('unit.h', { n: num(st.session_hours, 2) }),
+    log: (st.log_tail || []).slice(-10).join('\n') || t('log.empty'),
+    foot: words(st.foot, ''),
+  };
+  const w = {
+    bar: Math.max(0, Math.min(100, st.progress || 0)),
+    meter: st.budget_cu ? Math.min(100, (100 * (st.cu_used || 0)) / st.budget_cu) : 0,
+  };
+  // Widths first, before anything below reads layout: a bar that was just drawn
+  // must be born at its width. Set after a layout read, it transitions up from 0
+  // instead -- every stage change replayed the bar from empty, and in a page that
+  // is not painting (a background tab) it stayed at 0.
+  for (const el of $('rail').querySelectorAll('[data-w]')) {
+    const pct = Math.round((w[el.dataset.w] || 0) * 10) / 10 + '%';   // reads back identically
+    if (el.style.width !== pct) el.style.width = pct;
+  }
+  for (const el of $('rail').querySelectorAll('[data-v]')) {
+    const val = v[el.dataset.v] ?? '';
+    if (el.textContent === val) continue;
+    const stick = el.tagName === 'PRE' && el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+    el.textContent = val;
+    if (stick) el.scrollTop = el.scrollHeight;
+  }
 }
 
 function render() {
+  renderHeader();
   if (!st) return;
-  const busy = BUSY.includes(st.stage), ready = st.stage === 'ready';
-  const attached = st.stage === 'attached';
-  const ep = st.endpoint || {}, cli = st.cli || {}, bill = st.billing || {}, m = st.measured || {};
-  $('hdr').textContent = attached ? ('外部端点 · ' + st.live_model)
-    : ready ? ('已就绪 · ' + st.live_model)
-    : (busy ? (st.stage_label + ' · ' + fmt(st.progress, 0) + '%')
-            : (st.stage === 'idle' ? '无卡无模型' : st.stage_label));
-  $('stop').hidden = !(busy || ready);
-  $('stop').onclick = () => post('/control/stop', {});
-
-  let h = '';
-
-  // ---- session ---------------------------------------------------------- //
-  h += '<h4>本会话</h4>';
-  if (st.confirm) {
-    const w = st.confirm;
-    h += '<div class="card warn"><b>' + esc(w.headline) + '</b>';
-    for (const ln of (w.lines || [])) h += '<div class="meta">' + esc(ln) + '</div>';
-    h += '<button class="btn go" id="go">开始（现在开始计费）</button>' +
-         '<button class="btn no" id="cancel">取消</button></div>';
-  }
-  if (attached) {
-    h += '<div class="card ok">' +
-         row('模式', '外部端点') +
-         row('模型', esc(st.live_model)) +
-         row('端点', '<code>' + esc(ep.base || '—') + '</code>') +
-         '<div class="meta">我们没启动它，所以既不计费、也不会被自动停机；' +
-         '要申请自己的卡就重启前端、别带 --external-endpoint。</div>' +
-         '<button class="btn no" id="stop2">断开（只是不再指向它）</button></div>';
-  } else if (ready) {
-    h += '<div class="card ok">' +
-         row('模型', esc(st.live_model) + '<span class="pill">MTP</span>') +
-         row('端点', '<code>' + esc(ep.base || '—') + '</code>') +
-         row('密钥', ep.key ? '代理持有' : (ep.key_pending ? '读取中…' : '未读到')) +
-         row('空闲停机', clk(st.idle_left_s)) +
-         row('已跑', fmt(st.session_hours, 2) + ' h') +
-         '<button class="btn no" id="stop2">停机（停止计费）</button></div>';
-  } else if (busy) {
-    h += '<div class="card"><b>' + esc(st.stage_label) + '</b>' +
-         '<div class="bar"><i style="width:' + st.progress + '%"></i></div>' +
-         '<div class="meta">' + esc(st.progress_note) + '</div></div>';
-  } else {
-    h += '<div class="card"><div class="row"><span>状态</span><b>' + esc(st.stage_label) + '</b></div>' +
-         '<div class="meta">' + esc(st.progress_note) + '</div></div>';
-  }
-
-  // ---- recipes ---------------------------------------------------------- //
-  h += '<h4>卡与配方</h4>';
-  for (const r of st.recipes) {
-    const sel = st.selected === r.id, dis = (busy || ready || attached || st.confirm) ? 'disabled' : '';
-    h += '<div class="card"><b>' + esc(r.card) + '</b>' + (sel ? '<span class="pill">当前</span>' : '') +
-         (r.verified ? '' : '<span class="pill">未实测</span>') +
-         '<div class="meta">' + esc(r.model) + ' · ' + esc(r.quant) + '</div>' +
-         '<div class="meta">' + fmt(r.cu_per_hour, 2) + ' CU/h · ' + fmt(r.vram_gb, 0) +
-         ' GB · 约 ' + r.eta_min + ' 分钟</div>' +
-         '<button class="btn" data-r="' + r.id + '" ' + dis + '>' +
-         (ready && sel ? '已就绪' : '选它并启动') + '</button></div>';
-  }
-
-  // ---- money ------------------------------------------------------------ //
-  h += '<h4>钱</h4><div class="card">' +
-       row('本月已用', fmt(st.cu_used, 2) + ' CU') +
-       row('本月剩余', fmt(st.cu_left, 1) + ' / ' + fmt(st.budget_cu, 0) + ' CU') +
-       row('本次会话', fmt(st.session_hours, 2) + ' h') +
-       row('空闲停机', st.idle_stop_min + ' 分钟') +
-       row('连续上限', st.max_session_h + ' 小时') + '</div>';
-
-  // ---- speed ------------------------------------------------------------ //
-  h += '<h4>速度</h4><div class="card">' +
-       row('prefill', fmt((st.metrics || {}).prefill, 0) + ' t/s' +
-           (st.metrics ? '' : '<span class="pill">参考</span>')) +
-       row('decode', fmt((st.metrics || {}).decode, 1) + ' t/s' +
-           (st.metrics ? '' : '<span class="pill">参考</span>')) +
-       '<div class="meta">' + esc(m.where || '') + '</div></div>';
-
-  // ---- connection ------------------------------------------------------- //
-  h += '<h4>连接</h4><div class="card">' +
-       row('Colab CLI', esc(cli.colab)) +
-       row('WSL', esc(cli.wsl)) +
-       row('在计费实例', (bill.count === null || bill.count === undefined) ? '未探测'
-                          : bill.count + ' 个') +
-       '<details><summary>要跑的命令</summary><div class="log">' +
-       esc(cli.command || '（第一次选配方时生成）') + '</div></details>' +
-       '<details><summary>服务端账目原文</summary><div class="log">' +
-       esc(bill.raw || '（未探测）') + '</div></details></div>';
-
-  // ---- log -------------------------------------------------------------- //
-  h += '<h4>日志</h4><div class="card"><div class="log">' +
-       esc((st.log_tail || []).slice(-10).join('\n')) + '</div>' +
-       '<div class="meta">' + esc(st.footnote || '') + '</div></div>';
-
-  $('body').innerHTML = h;
-
-  for (const b of document.querySelectorAll('.btn[data-r]')) {
-    b.onclick = async () => { const r = await post('/control/select', { recipe: b.dataset.r });
-                              if (r.message && r.code !== 'confirm_required') flash(r.message); };
-  }
-  const go = $('go'), cancel = $('cancel'), stop2 = $('stop2');
-  if (go) go.onclick = () => post('/control/select', { recipe: st.confirm.recipe, confirm: true });
-  if (cancel) cancel.onclick = () => { st.confirm = null; render(); };
-  if (stop2) stop2.onclick = () => post('/control/stop', {});
+  put('s-session', sessionHTML());
+  put('s-recipes', recipesHTML());
+  put('s-money', moneyHTML());
+  put('s-speed', speedHTML());
+  put('s-conn', connHTML());
+  put('s-log', logHTML());
+  bindValues();
 }
 
-function flash(msg) { $('hdr').textContent = msg; }
+// ---- talking to the control plane --------------------------------------- //
+async function refresh() {
+  try {
+    const r = await fetch('/control/status', { cache: 'no-store' });
+    st = await r.json();
+    down = null;
+  } catch (e) {
+    down = String(e);
+  }
+  render();
+}
 
+async function post(path, body) {
+  pending = true;
+  render();
+  try {
+    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(body || {}) });
+    let j = {};
+    try { j = await r.json(); } catch (e) { /* not JSON */ }
+    if (!r.ok && j && j.error) return { code: 'error', err: j.error.message || String(r.status) };
+    return j;
+  } catch (e) {
+    return { code: 'error', err: String(e) };
+  } finally {
+    pending = false;
+    await refresh();
+  }
+}
+
+function toast(text) {
+  const el = $('toast');
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 6000);
+}
+
+function say(r) {
+  if (!r || !r.code || QUIET.includes(r.code)) return;
+  if (r.code === 'unverified') {
+    const rec = ((st && st.recipes) || []).find((x) => x.id === r.recipe);
+    return toast(rec && rec.note ? (rec.note[lang] || rec.note.en) : r.code);
+  }
+  const a = Object.assign({}, r);
+  if (r.stage) a.stage = t('stage.' + r.stage, null, r.stage);
+  if (r.cu_left !== undefined) a.left = num(r.cu_left, 1);
+  if (r.cu_need !== undefined) a.need = num(r.cu_need, 1);
+  toast(t('code.' + r.code, a, r.code));
+}
+
+function setLang(l) {
+  if (!I18N[l]) return;
+  lang = l;
+  try { localStorage.setItem('collabosm.lang', l); } catch (e) { /* storage blocked */ }
+  // The proxy words its own "no instance" error in this language (the WebUI shows it).
+  document.cookie = 'collabosm_lang=' + l + '; path=/; max-age=31536000; SameSite=Strict';
+  document.documentElement.lang = HTML_LANG[l];
+  for (const k of Object.keys(drawn)) delete drawn[k];
+  render();
+}
+
+document.addEventListener('click', async (e) => {
+  const lb = e.target.closest('[data-lang]');
+  if (lb) return setLang(lb.dataset.lang);
+  const b = e.target.closest('[data-act]');
+  if (!b || b.disabled || pending) return;
+  const act = b.dataset.act;
+  if (act === 'pick') say(await post('/control/select', { recipe: b.dataset.r }));
+  else if (act === 'go' && st && st.confirm) {
+    say(await post('/control/select', { recipe: st.confirm.recipe, confirm: true }));
+  } else if (act === 'cancel') say(await post('/control/cancel', {}));
+  else if (act === 'stop') say(await post('/control/stop', {}));
+});
+
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (!d.dataset || !d.dataset.d) return;
+  if (d.open) openDetails.add(d.dataset.d); else openDetails.delete(d.dataset.d);
+}, true);
+
+function toggleRail(force) {
+  const m = $('main');
+  m.classList.toggle('collapsed', force === undefined ? !m.classList.contains('collapsed') : force);
+  renderHeader();
+}
+$('toggle').addEventListener('click', () => toggleRail());
+addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleRail(); }
+});
+
+// Follow the WebUI's own light/dark mode (mode-watcher puts `dark` on its <html>).
+// Read-only: the iframe is same-origin and nothing in it is changed. When it cannot
+// be read, the shell falls back to the system preference.
+let themeWatch = null;
+function syncTheme() {
+  let dark = null;
+  try {
+    const root = $('ui').contentDocument && $('ui').contentDocument.documentElement;
+    if (root) {
+      dark = root.classList.contains('dark');
+      if (!themeWatch) {
+        themeWatch = new MutationObserver(syncTheme);
+        themeWatch.observe(root, { attributes: true, attributeFilter: ['class'] });
+      }
+    }
+  } catch (e) { dark = null; }
+  if (dark === null) delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+}
+$('ui').addEventListener('load', () => {
+  if (themeWatch) themeWatch.disconnect();
+  themeWatch = null;
+  syncTheme();
+});
+
+if (innerWidth < 900) $('main').classList.add('collapsed');
+setLang(lang);
 refresh();
 setInterval(refresh, 1500);
 </script>

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """The control plane behind the shell's right rail -- the real one.
 
-The shell asks three questions and nothing else:
+The shell asks four questions and nothing else:
 
     status()                     what should the rail draw
     select(recipe, confirm)      start paying for a card
+    cancel()                     forget a confirmation that was never given
     stop(reason)                 stop paying for a card
 
 Everything expensive lives behind that seam: the WSL bridge to the Colab CLI,
@@ -22,12 +23,14 @@ Why the confirmation gate
     returns `confirm_required` with the numbers (CU/h, ETA, cost of the load,
     what is left this month); only `confirm: true` starts the job.
 
-Why an idle auto-stop
+Why an idle auto-stop, and a stop on failure
     A100 High-RAM is 7.52 CU/h and the plan is ~200 CU/month, so 26.6 h. An
     idle session left open overnight is a month of work. Nothing here starts a
     keep-alive: the job is the only thing that keeps the VM alive, and
     `idle_stop_min` (default 20) after the last chat request the VM is stopped
-    and the reason is written into the ledger.
+    and the reason is written into the ledger. A job that fails after `assign`
+    is stopped the same way: up.sh stops nothing on its way out, and a failed
+    run whose VM keeps billing is worse than no run at all.
 
 Adopt, never duplicate
     Provisioning goes through scripts/up.sh -> scripts/restore.py, which
@@ -35,10 +38,17 @@ Adopt, never duplicate
     (that is what restore.py exists for: a pruned local session record once cost
     a duplicate VM).
 
+Words are the shell's job
+    The rail is drawn in English, Chinese or Japanese, so nothing here writes a
+    sentence for it: `note` and `foot` are {"k": key, "a": args} and answers
+    carry a `code`. shell.html owns every string in all three languages. Log
+    lines stay raw -- they are what up.sh printed.
+
 Rehearsal
     `fake=True` swaps the WSL command for frontend/fake_provision.py, which
     emits the same log lines in ~24 s. That is how this file is exercised
-    without a card: server.py --fake-provision.
+    without a card: server.py --fake-provision, or --mock with a ledger that is
+    never written.
 """
 from __future__ import annotations
 
@@ -69,7 +79,12 @@ RECIPES = [
         "verified": True,
         "env": {"CACHE_SIZE": 500224, "CACHE_QUANT": 4, "CPU_CACHE_GB": 32,
                 "RECURRENT_CACHE_GB": 24, "NDT": 4, "GCS": 8192},
-        "note": "本仓库实测：prefill 2,806 t/s（gcs 8192 -> 3,882），decode 97.4 t/s",
+        # Data carries its own translations, so a new recipe needs no shell change.
+        "note": {
+            "en": "Measured in this repo: prefill 2,806 t/s (3,882 at gcs 8192), decode 97.4 t/s",
+            "zh": "本仓库实测：prefill 2,806 t/s（gcs 8192 -> 3,882），decode 97.4 t/s",
+            "ja": "本リポジトリ実測：prefill 2,806 t/s（gcs 8192 で 3,882）、decode 97.4 t/s",
+        },
     },
     {
         "id": "a100-40g/qwen38-27b",
@@ -83,28 +98,23 @@ RECIPES = [
         "verified": False,
         "env": {"CACHE_SIZE": 262144, "CACHE_QUANT": 4, "CPU_CACHE_GB": 0,
                 "RECURRENT_CACHE_GB": 4, "NDT": 4, "GCS": 4096},
-        "note": "配方还没有脚本：40 GB 卡装不下 Flash-Next（要 ~63.6 GiB 常驻显存），这一步是路线图",
+        "note": {
+            "en": "No script yet: a 40 GB card cannot hold Flash-Next (~63.6 GiB must stay "
+                  "in VRAM). This one is roadmap.",
+            "zh": "配方还没有脚本：40 GB 卡装不下 Flash-Next（要 ~63.6 GiB 常驻显存），这一步是路线图",
+            "ja": "スクリプト未整備：40 GB カードには Flash-Next が載りません（約 63.6 GiB を"
+                  " VRAM に常駐させる必要）。ロードマップ項目です",
+        },
     },
 ]
 
+# Reference numbers, not this session's: the shell labels them as such.
 MEASURED_REFERENCE = {"prefill": 2806.0, "prefill_gcs8192": 3882.0, "decode": 97.4,
-                      "where": "本仓库 2026-09-25 在 A100-80G High-RAM 的实测，不是本次会话的数字"}
+                      "measured_on": "2026-09-25", "card": "A100-80G High-RAM"}
 
 # --------------------------------------------------------------------------- #
 # the provisioning stages, and how the rail should pace them                   #
 # --------------------------------------------------------------------------- #
-
-STAGE_LABEL = {"idle": "无卡无模型", "requesting": "申请中", "uploading": "上传工具包",
-               "bootstrapping": "安装与下载", "loading": "写入显存", "ready": "已就绪",
-               "stopping": "正在停机", "stopped": "已停机", "failed": "失败",
-               "attached": "已连接外部端点"}
-
-STAGE_NOTE = {
-    "requesting": "向 Colab 申请实例并校验形状；抽到 40 GB 会自动退回（约 0.13 CU）",
-    "uploading": "上传 api_server / bootstrap / serve 到 /content",
-    "bootstrapping": "安装 ExLlamaV3 运行时，并从 Hugging Face 拉 ~100 GiB 权重",
-    "loading": "把 ~63.6 GiB 写进显存，建 KV 页表与 n-gram 表",
-}
 
 # (progress floor, progress ceiling) per stage, and the seconds it usually takes
 STAGE_SPAN = {"requesting": (0.0, 8.0), "uploading": (8.0, 14.0),
@@ -112,23 +122,27 @@ STAGE_SPAN = {"requesting": (0.0, 8.0), "uploading": (8.0, 14.0),
 STAGE_SECS = {"requesting": 120.0, "uploading": 120.0,
               "bootstrapping": 330.0, "loading": 300.0}
 
-VM_STAGE_NOTE = {"probing": "校验实例形状", "runtime": "安装 ExLlamaV3 运行时",
-                 "weights": "从 Hugging Face 拉权重", "env": "写入启动环境",
-                 "bootstrapped": "引导完成，准备起服务", "loading": "载入模型到显存",
-                 "ready": "服务已健康"}
+# /content/STATUS stages (bootstrap.sh, then serve.sh) -> the rail stage they belong to
+VM_STAGES = {"probing": "bootstrapping", "runtime": "bootstrapping",
+             "weights": "bootstrapping", "env": "bootstrapping",
+             "bootstrapped": "bootstrapping", "loading": "loading", "ready": "loading",
+             "serve_failed": "loading", "serve_timeout": "loading",
+             "ready_no_tunnel": "loading"}
 
 # stages only move forward, so a relayed `stage=probing` line cannot drag the
-# rail back from 写入显存 to 安装与下载 while progress stays at 60%
+# rail back from loading to bootstrapping while progress stays at 60%
 STAGE_ORDER = ["idle", "requesting", "uploading", "bootstrapping", "loading", "ready"]
 
-EXIT_NOTE = {
-    1: "上传或引导失败，看下面几行日志",
-    3: "服务端实例数已到上限，先停掉别的会话",
-    4: "assign 请求被拒（账号可能没有 A100 资格）",
-    5: "读不到 assignments，CLI 可能需要重新登录",
-    6: "抽到 40 GB 标准卡，已自动退回并停机（约 0.13 CU）；再点一次重抽",
-    7: "等待端点超时（默认 50 分钟）",
-}
+# A ledger session no frontend closed is billed up to the last heartbeat plus this:
+# Colab idle-prunes an unattended VM after roughly 90 minutes (docs/RUNBOOK.md).
+STALE_GRACE_S = 90 * 60
+
+NO_ENDPOINT = {"base": None, "key": None, "key_pending": False}
+
+
+def _note(key: str, **args) -> dict:
+    """A sentence for the rail, as data -- shell.html words it in the viewer's language."""
+    return {"k": key, "a": args}
 
 
 def _sanitize(text: str) -> str:
@@ -154,12 +168,12 @@ def _root_of(base: str) -> str:
 
 
 class Control:
-    """status() / select() / stop() -- the whole contract the shell needs."""
+    """status() / select() / cancel() / stop() -- the whole contract the shell needs."""
 
     def __init__(self, root: str, *, session: str = "collabosm", distro: str = "Ubuntu",
                  budget_cu: float = 200.0, idle_stop_min: int = 20,
                  max_session_h: float = 6.0, fake: bool = False,
-                 state_dir: str | None = None,
+                 state_dir: str | None = None, persist_ledger: bool = True,
                  external: str | None = None, external_key: str | None = None,
                  external_model: str | None = None):
         self.root = os.path.abspath(root)
@@ -183,6 +197,7 @@ class Control:
         else:
             self.state_dir = os.path.join(os.path.expanduser("~"), ".collabosm")
         self.ledger_path = os.path.join(self.state_dir, "ledger.json")
+        self.persist_ledger = persist_ledger
 
         self.lock = threading.RLock()
         self.proc = None
@@ -194,16 +209,20 @@ class Control:
         self.log = collections.deque(maxlen=40)
 
         self.ledger = self._load_ledger()
+        # An open session at startup was opened by a frontend that is gone: it
+        # crashed or was closed with a box up, and that VM may still be billing.
+        self.stale = bool(self.ledger.get("open")) and not self.external
         self.state = {
             "stage": "idle",
-            "stage_label": STAGE_LABEL["idle"],
             "progress": 0.0,
-            "progress_note": "还没选配方。选一个就开始计费，所以先把数字给你看。",
+            "note": _note("idle.pick"),
+            "foot": _note("foot.control"),
             "selected": None,
             "live_model": None,
+            # live measurements, when something measures them; the reference
+            # numbers live in `measured` and are never passed off as these
             "metrics": None,
             "recipes": RECIPES,
-            "footnote": "控制面：WSL -> colab CLI -> restore.py -> up.sh",
             "budget_cu": self.budget_cu,
             "cu_used": 0.0,
             "cu_left": self.budget_cu,
@@ -211,7 +230,7 @@ class Control:
             "idle_stop_min": self.idle_stop_min,
             "idle_left_s": None,
             "max_session_h": self.max_session_h,
-            "endpoint": {"base": None, "key": None, "key_pending": False},
+            "endpoint": dict(NO_ENDPOINT),
             "billing": {"count": None, "raw": "", "checked_at": None},
             "cli": {"wsl": distro, "colab": "unknown", "root": _wsl_path(self.root),
                     "command": None, "checked_at": None},
@@ -224,17 +243,24 @@ class Control:
         if self.external:
             with self.lock:
                 self.state.update(
-                    stage="attached", stage_label=STAGE_LABEL["attached"], progress=100.0,
+                    stage="attached", progress=100.0,
                     live_model=external_model or "external",
-                    progress_note="外部端点已接上；不会计费，也不会被自动停机",
+                    note=_note("attached"),
                     endpoint={"base": self.external, "key": external_key, "key_pending": False},
-                    footnote="外部端点：%s（本机没有申请实例）" % self.external)
+                    foot=_note("foot.external", base=self.external))
+        elif self.stale:
+            op = self.ledger["open"]
+            with self.lock:
+                self.state["note"] = _note("ledger.stale", recipe=op.get("recipe"),
+                                           start=op.get("start"))
         threading.Thread(target=self._watch, daemon=True).start()
         threading.Thread(target=self._probe_cli, daemon=True).start()
 
     # ---- money ---------------------------------------------------------- #
 
     def _load_ledger(self) -> dict:
+        if not self.persist_ledger:
+            return {"closed_cu": 0.0, "entries": [], "open": None}
         try:
             with open(self.ledger_path) as fh:
                 led = json.load(fh)
@@ -246,6 +272,8 @@ class Control:
             return {"closed_cu": 0.0, "entries": [], "open": None}
 
     def _save_ledger(self) -> None:
+        if not self.persist_ledger:
+            return
         try:
             os.makedirs(self.state_dir, exist_ok=True)
             tmp = self.ledger_path + ".tmp"
@@ -256,23 +284,35 @@ class Control:
             self._log("!! ledger write failed: %r" % exc)
 
     def _open_session(self, recipe: dict) -> None:
-        self.ledger["open"] = {"start": time.time(), "recipe": recipe["id"],
+        now = time.time()
+        self.ledger["open"] = {"start": now, "seen": now, "recipe": recipe["id"],
                                "cu_per_hour": recipe["cu_per_hour"]}
         self._save_ledger()
+
+    def _billed_until(self, op: dict) -> float:
+        """Now -- or, for a session no running frontend opened, the last heartbeat
+        plus Colab's idle prune: the VM cannot have outlived that unattended, and a
+        multi-day phantom would eat the whole month's budget."""
+        now = time.time()
+        if self.stale:
+            return min(now, op.get("seen", op["start"]) + STALE_GRACE_S)
+        return now
 
     def _close_session(self, reason: str) -> float:
         op = self.ledger.get("open")
         if not op:
             return 0.0
-        hours = max(0.0, time.time() - op["start"]) / 3600.0
+        end = self._billed_until(op)
+        hours = max(0.0, end - op["start"]) / 3600.0
         cu = hours * op["cu_per_hour"]
         self.ledger["closed_cu"] = round(self.ledger.get("closed_cu", 0.0) + cu, 4)
-        self.ledger["entries"].append({"start": op["start"], "end": time.time(),
+        self.ledger["entries"].append({"start": op["start"], "end": end,
                                        "minutes": round(hours * 60, 1), "cu": round(cu, 3),
                                        "recipe": op["recipe"],
                                        "cu_per_hour": op["cu_per_hour"], "reason": reason})
         self.ledger["entries"] = self.ledger["entries"][-200:]
         self.ledger["open"] = None
+        self.stale = False
         self._save_ledger()
         return cu
 
@@ -281,7 +321,7 @@ class Control:
         used = float(self.ledger.get("closed_cu", 0.0))
         hours = 0.0
         if op:
-            hours = max(0.0, time.time() - op["start"]) / 3600.0
+            hours = max(0.0, self._billed_until(op) - op["start"]) / 3600.0
             used += hours * op["cu_per_hour"]
         with self.lock:
             self.state["cu_used"] = round(used, 3)
@@ -299,76 +339,84 @@ class Control:
                 idle = time.time() - self.last_activity
                 self.state["idle_left_s"] = int(max(0, self.idle_stop_min * 60 - idle))
             st = json.loads(json.dumps(self.state))
+            st["ledger_open"] = self.ledger.get("open") is not None
+        # The VM key is ours to hold, not the browser's: the rail only needs to
+        # know that there is one.
+        st["endpoint"]["key"] = bool(st["endpoint"].get("key"))
         st["log_tail"] = list(self.log)[-12:]
         return st
 
     def select(self, recipe_id: str, confirm: bool = False) -> dict:
         recipe = next((r for r in RECIPES if r["id"] == recipe_id), None)
         if recipe is None:
-            return {"ok": False, "code": "unknown_recipe", "message": "没有这个配方"}
+            return {"ok": False, "code": "unknown_recipe"}
         with self.lock:
             stage = self.state["stage"]
             if stage == "attached":
-                return {"ok": False, "code": "attached",
-                        "message": "现在接的是外部端点 %s。要申请自己的卡就重启前端、别带 "
-                                   "--external-endpoint" % self.external}
+                return {"ok": False, "code": "attached", "base": self.external}
             if stage in ("requesting", "uploading", "bootstrapping", "loading", "stopping"):
-                return {"ok": False, "code": "busy",
-                        "message": "正在忙：%s" % self.state["progress_note"]}
+                return {"ok": False, "code": "busy", "stage": stage}
             if stage == "ready":
                 if self.state["live_model"] == recipe["model"]:
-                    return {"ok": True, "code": "already", "message": "这个配方已经就绪"}
-                return {"ok": False, "code": "stop_first",
-                        "message": "已经有一个实例在跑。先停机再换配方（换配方就是一次重新载入）"}
+                    return {"ok": True, "code": "already"}
+                return {"ok": False, "code": "stop_first"}
+            if self.ledger.get("open"):
+                # a session the last frontend never closed: stop (and account for)
+                # it before a new one opens on top of it
+                return {"ok": False, "code": "stale_ledger"}
             if not recipe["verified"]:
-                return {"ok": False, "code": "unverified", "message": recipe["note"]}
+                return {"ok": False, "code": "unverified", "recipe": recipe["id"]}
             left = self.state["cu_left"]
             need = round(recipe["cu_per_hour"] * ((recipe["eta_min"] + 5) / 60.0), 2)
             if left < max(3.0, need):
-                return {"ok": False, "code": "budget",
-                        "message": "本月 CU 只剩 %.1f，低于这次启动的估算 %.1f CU" % (left, need)}
+                return {"ok": False, "code": "budget", "cu_left": round(left, 1),
+                        "cu_need": round(need, 1)}
             warn = {"recipe": recipe["id"], "card": recipe["card"], "model": recipe["model"],
                     "cu_per_hour": recipe["cu_per_hour"],
                     "usd_per_hour": round(recipe["cu_per_hour"] * 0.0999, 2),
                     "eta_min": recipe["eta_min"],
                     "cu_estimate": need,
+                    "budget_cu": self.budget_cu,
                     "cu_left": left,
                     "cu_left_after": round(left - need, 2),
                     "idle_stop_min": self.idle_stop_min,
-                    "max_session_h": self.max_session_h,
-                    "headline": "点“开始”就开始计费：%s，%.2f CU/h，预计 %d 分钟"
-                                % (recipe["card"], recipe["cu_per_hour"], recipe["eta_min"]),
-                    "lines": [
-                        "载入本身就值 ~%.1f CU（约 %d 分钟）；换一次配方就是一次载入。"
-                        % (need, recipe["eta_min"]),
-                        "空闲 %d 分钟自动停机，连续最长 %g 小时。" % (self.idle_stop_min,
-                                                                    self.max_session_h),
-                        "本月预算 %.0f CU，现在剩 %.1f；启动后预计剩 %.1f。"
-                        % (self.budget_cu, left, left - need),
-                    ]}
+                    "max_session_h": self.max_session_h}
             if not confirm:
                 self.state["confirm"] = warn
                 return {"ok": True, "code": "confirm_required", "warning": warn}
         self._start_job(recipe)
         return {"ok": True, "code": "started", "recipe": recipe["id"]}
 
+    def cancel(self) -> dict:
+        """Forget a pending confirmation. Nothing was started, so nothing is billed.
+
+        The shell used to clear only its own copy, and the next poll brought the
+        card straight back with every recipe button still disabled.
+        """
+        with self.lock:
+            self.state["confirm"] = None
+        return {"ok": True, "code": "cancelled"}
+
     def stop(self, reason: str = "manual") -> dict:
         with self.lock:
             stage = self.state["stage"]
             if stage == "attached":
-                self.state.update(stage="idle", stage_label=STAGE_LABEL["idle"], progress=0.0,
-                                  live_model=None, metrics=None,
-                                  endpoint={"base": None, "key": None, "key_pending": False},
-                                  progress_note="已断开外部端点（没有实例可以停）",
-                                  footnote="控制面：WSL -> colab CLI -> restore.py -> up.sh")
-                return {"ok": True, "code": "detached", "message": "已断开外部端点"}
-            if stage in ("idle", "stopped", "failed"):
-                return {"ok": True, "code": "nothing_to_stop",
-                        "message": "现在没有在计费的实例"}
+                self.state.update(stage="idle", progress=0.0, live_model=None, metrics=None,
+                                  endpoint=dict(NO_ENDPOINT), note=_note("detached"),
+                                  foot=_note("foot.control"))
+                return {"ok": True, "code": "detached"}
+            if stage == "stopping":
+                return {"ok": True, "code": "already_stopping"}
+            stale = self.stale and self.ledger.get("open") is not None
+            if stage in ("idle", "stopped") and not stale:
+                return {"ok": True, "code": "nothing_to_stop"}
+            # `failed` gets here on purpose: _fail() already ran down.sh, and this
+            # is the manual retry for when the billing probe still shows a VM.
             running_job = stage in ("requesting", "uploading", "bootstrapping", "loading")
+            if stale:
+                reason = "stale"
             self.state["stage"] = "stopping"
-            self.state["stage_label"] = STAGE_LABEL["stopping"]
-            self.state["progress_note"] = "正在停机（%s）" % reason
+            self.state["note"] = _note("stopping", reason=reason)
             self.stop_wanted = True
             proc = self.proc
         cu = self._close_session(reason)
@@ -414,13 +462,12 @@ class Control:
             self.stage_started = time.time()
             self.stop_wanted = False
             self.last_activity = time.time()
-            self.state.update(stage="requesting", stage_label=STAGE_LABEL["requesting"],
-                              progress=0.0, progress_note=STAGE_NOTE["requesting"],
+            self.state.update(stage="requesting", progress=0.0,
+                              note=_note("stage.requesting"),
                               selected=recipe["id"], live_model=None, metrics=None,
-                              confirm=None,
-                              endpoint={"base": None, "key": None, "key_pending": False},
-                              footnote="计费已开始：%s · %.2f CU/h"
-                                       % (recipe["card"], recipe["cu_per_hour"]))
+                              confirm=None, endpoint=dict(NO_ENDPOINT),
+                              foot=_note("foot.billing", card=recipe["card"],
+                                         cuph=recipe["cu_per_hour"]))
         self._open_session(recipe)
         threading.Thread(target=self._beat, daemon=True).start()
         threading.Thread(target=self._run, args=(recipe,), daemon=True).start()
@@ -455,7 +502,8 @@ class Control:
         try:
             proc = self._spawn(recipe)
         except Exception as exc:
-            self._fail("启动不了命令：%r" % exc)
+            self._fail(_note("fail.spawn", err=repr(exc)), "could not launch: %r" % exc,
+                       vm_possible=False)
             return
         self.proc = proc
         try:
@@ -464,7 +512,11 @@ class Control:
             rc = proc.wait()
         except Exception as exc:
             self.proc = None
-            self._fail("读日志失败：%r" % exc)
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            self._fail(_note("fail.read", err=repr(exc)), "reading the job log failed: %r" % exc)
             return
         self.proc = None
 
@@ -474,9 +526,11 @@ class Control:
             self._after_ready(recipe)
             return
         if rc == 0:
-            self._fail("up.sh 正常退出但没等到 READY（看日志）")
+            self._fail(_note("fail.noready"), "up.sh exited 0 without READY")
             return
-        self._fail("up.sh 退出码 %s — %s" % (rc, EXIT_NOTE.get(rc, "看日志")))
+        # 2-5 never got a box and restore.py already stopped a 40 GB one (6); down.sh
+        # is harmless for those and settles the question for all the rest.
+        self._fail(_note("fail.exit", rc=rc), "up.sh exited %s" % rc)
 
     def _after_ready(self, recipe: dict) -> None:
         """The tunnel is a quick tunnel: pull the key once so the proxy can inject it."""
@@ -484,7 +538,7 @@ class Control:
             with self.lock:
                 self.state["endpoint"]["key"] = "sk-collabosm-rehearsal"
                 self.state["endpoint"]["key_pending"] = False
-                self.state["metrics"] = MEASURED_REFERENCE
+                self.state["note"] = _note("ready")
             return
         with self.lock:
             self.state["endpoint"]["key_pending"] = True
@@ -499,11 +553,14 @@ class Control:
         with self.lock:
             self.state["endpoint"]["key"] = key
             self.state["endpoint"]["key_pending"] = False
-            self.state["metrics"] = MEASURED_REFERENCE
+            self.state["note"] = _note("ready")
+            base = self.state["endpoint"]["base"]
         self._log("[fe] api key loaded" if key else
                   "!! could not read /content/api-key.txt -- chat will 503")
+        if not base:
+            self._log("!! READY but no published URL was seen -- chat will 503")
 
-    def _do_stop(self, reason: str, cu: float) -> None:
+    def _run_down(self) -> None:
         if self.fake:
             out = "[down] rehearsal: no VM was ever created"
         else:
@@ -513,23 +570,36 @@ class Control:
             out = self._wsl_run(argv, timeout=300)
         for line in out.splitlines()[-6:]:
             self._log(line)
-        with self.lock:
-            self.state.update(stage="stopped", stage_label=STAGE_LABEL["stopped"],
-                              progress=0.0, live_model=None,
-                              endpoint={"base": None, "key": None, "key_pending": False},
-                              progress_note="已停机（%s）· 这次约 %.2f CU" % (reason, cu),
-                              footnote="停机原因：%s。控制面在，VM 不在。" % reason)
-        self._refresh_money()
 
-    def _fail(self, message: str) -> None:
-        cu = self._close_session("failed")
+    def _do_stop(self, reason: str, cu: float) -> None:
+        self._run_down()
         with self.lock:
-            self.state.update(stage="failed", stage_label=STAGE_LABEL["failed"],
-                              progress_note=message, live_model=None, metrics=None,
-                              endpoint={"base": None, "key": None, "key_pending": False},
-                              footnote="失败 · 这次约花了 %.2f CU" % cu)
-        self._log("!! " + message)
+            self.state.update(stage="stopped", progress=0.0, live_model=None,
+                              endpoint=dict(NO_ENDPOINT),
+                              note=_note("stopped", reason=reason, cu=round(cu, 2)),
+                              foot=_note("foot.stopped", reason=reason))
         self._refresh_money()
+        self._probe_sessions()
+
+    def _fail(self, note: dict, why: str, vm_possible: bool = True) -> None:
+        cu = self._close_session("failed")
+        note["a"]["autostop"] = "running" if vm_possible else "none"
+        with self.lock:
+            self.state.update(stage="failed", note=note, live_model=None, metrics=None,
+                              endpoint=dict(NO_ENDPOINT),
+                              foot=_note("foot.failed", cu=round(cu, 2)))
+        self._log("!! " + why)
+        self._refresh_money()
+        if not vm_possible:
+            return
+        # up.sh stops nothing on its way out, so a failure after `assign` leaves a
+        # VM billing behind a ledger entry that says it closed -- and the rail used
+        # to refuse to stop a failed job at all.
+        self._run_down()
+        with self.lock:
+            if self.state["stage"] == "failed":
+                self.state["note"]["a"]["autostop"] = "done"
+        self._probe_sessions()
 
     def _wsl_run(self, argv: list, timeout: float = 120.0) -> str:
         try:
@@ -550,20 +620,22 @@ class Control:
 
     def _set_stage(self, stage: str, note=None) -> None:
         with self.lock:
-            if self.state["stage"] in ("ready", "failed", "stopped") and stage != "ready":
+            cur = self.state["stage"]
+            # a late log line must not revive a job that is stopping or over
+            if cur in ("stopping", "stopped", "failed"):
                 return
-            cur, want = self.state["stage"], stage
-            if (cur in STAGE_ORDER and want in STAGE_ORDER
-                    and STAGE_ORDER.index(want) < STAGE_ORDER.index(cur)):
+            if cur == "ready" and stage != "ready":
                 return
-            if STAGE_LABEL.get(self.state["stage"]) != STAGE_LABEL.get(stage):
+            if (cur in STAGE_ORDER and stage in STAGE_ORDER
+                    and STAGE_ORDER.index(stage) < STAGE_ORDER.index(cur)):
+                return
+            if cur != stage:
                 self.stage_started = time.time()
             floor = STAGE_SPAN.get(stage, (100.0, 100.0))[0]
             self.state["stage"] = stage
-            self.state["stage_label"] = STAGE_LABEL.get(stage, stage)
             self.state["progress"] = max(self.state["progress"], floor)
             if note:
-                self.state["progress_note"] = note
+                self.state["note"] = note
 
     def _absorb(self, raw: str) -> None:
         line = raw.strip()
@@ -571,44 +643,52 @@ class Control:
             return
         self._log(line)
         if "restoring/creating the A100" in line:
-            return self._set_stage("requesting", STAGE_NOTE["requesting"])
+            return self._set_stage("requesting", _note("stage.requesting"))
         m = re.search(r"\[restore\] box: (.+)", line)
         if m:
-            return self._set_stage("requesting", "实例形状校验：%s" % m.group(1))
+            return self._set_stage("requesting", _note("box", box=m.group(1)))
         if "uploading the toolkit" in line:
-            return self._set_stage("uploading", STAGE_NOTE["uploading"])
+            return self._set_stage("uploading", _note("stage.uploading"))
         if "bootstrapping (runtime" in line:
-            return self._set_stage("bootstrapping", STAGE_NOTE["bootstrapping"])
+            return self._set_stage("bootstrapping", _note("stage.bootstrapping"))
         if "waiting up to" in line:
-            return self._set_stage("bootstrapping", "已在等待循环里，端点一健康就切换")
+            return self._set_stage("bootstrapping", _note("waiting"))
         if re.search(r"\] READY$", line):
             with self.lock:
                 self.state["progress"] = 99.0
-                self.state["progress_note"] = "服务已健康，正在取隧道地址与密钥"
                 if self.job_recipe:
                     # the rail shows this; it is the model the recipe asked for
                     self.state["live_model"] = self.job_recipe["model"]
                     self.state["selected"] = self.job_recipe["id"]
-            return self._set_stage("ready", "服务已健康")
+            return self._set_stage("ready", _note("ready.fetching"))
         m = re.search(r"stage:\s+stage=(\w+)", line)
         if m:
-            note = VM_STAGE_NOTE.get(m.group(1))
-            if note:
-                stage = "loading" if m.group(1) in ("loading", "ready") else "bootstrapping"
-                return self._set_stage(stage, "VM：%s" % note)
+            # serve.sh writes the published address into STATUS -- the quick
+            # tunnel's hostname, or PUBLIC_URL for a named tunnel -- so it is read
+            # here as well as from the trycloudflare pattern below.
+            u = re.search(r"\burl=(https?://\S+)", line)
+            if u:
+                with self.lock:
+                    self.state["endpoint"]["base"] = u.group(1).rstrip("/") + "/v1"
+            rail = VM_STAGES.get(m.group(1))
+            if rail:
+                return self._set_stage(rail, _note("vm", vm=m.group(1)))
+            return
         m = re.search(r"gpu_MiB:\s+([\d.]+),\s*([\d.]+)", line)
         if m:
             with self.lock:
-                self.state["progress_note"] = "显存 %s / %s MiB" % (m.group(1), m.group(2))
+                if self.state["stage"] not in ("stopping", "stopped", "failed"):
+                    self.state["note"] = _note("vram", used=m.group(1), total=m.group(2))
             return
         m = re.search(r"(https://[a-z0-9-]+\.trycloudflare\.com)", line)
         if m:
             with self.lock:
                 self.state["endpoint"]["base"] = m.group(1) + "/v1"
             return
-        if line.startswith("!!") or "BOOTSTRAP_FAILED" in line or "bootstrap reported failure" in line:
+        if "!!" in line or "BOOTSTRAP_FAILED" in line:
             with self.lock:
-                self.state["progress_note"] = line
+                if self.state["stage"] not in ("stopping", "stopped", "failed"):
+                    self.state["note"] = _note("raw", text=line)
 
     # ---- background loops ------------------------------------------------- #
 
@@ -646,6 +726,11 @@ class Control:
                     self.state["idle_left_s"] = None
                     idle = 0.0
                 hours = self.state["session_hours"]
+                # Heartbeat: if this process dies with a box up, the next one bills
+                # that session up to here plus Colab's idle prune, not up to "now".
+                if op and not self.stale and time.time() - op.get("seen", 0) > 60:
+                    op["seen"] = time.time()
+                    self._save_ledger()
             if stage == "ready":
                 if idle > self.idle_stop_min * 60:
                     self._log("[fe] idle for %d min -- stopping the VM" % int(idle / 60))
@@ -653,7 +738,7 @@ class Control:
                 elif hours > self.max_session_h:
                     self._log("[fe] session ran %g h -- stopping the VM" % hours)
                     self.stop("max_hours")
-            elif stage in ("idle", "stopped") and time.time() - last_probe > 300:
+            elif stage in ("idle", "stopped", "failed") and time.time() - last_probe > 300:
                 last_probe = time.time()
                 threading.Thread(target=self._probe_sessions, daemon=True).start()
 
