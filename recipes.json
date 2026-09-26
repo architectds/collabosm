@@ -1,0 +1,134 @@
+{
+  "schema": 1,
+  "updated": "2026-09-26",
+  "about": "Which GPU runs which model, and how. scripts/recipe.py turns a recipe id into the environment scripts/up.sh launches with; the frontend lists what is here. Every number carries {v, measured, src}: measured means read on that card, anything else is an estimate and says so.",
+  "gpus": [
+    {
+      "id": "a100-80g-hm",
+      "card": "A100-80G High-RAM",
+      "accelerator": "A100",
+      "shape": "hm",
+      "vram_gb": 80,
+      "ram_gb": 167,
+      "min_vram_gib": 70,
+      "cu_per_hour": 6.77,
+      "facts": {
+        "cu_per_hour": {"v": 6.77, "measured": true, "src": "Colab /tun/m/ccu-info consumptionRateHourly with this box as the account's only assignment, 2026-09-25 (older docs quote 7.52)"},
+        "vram": {"v": 79.3, "unit": "GiB", "measured": true, "src": "restore.py probe, docs/MEASURED.md"},
+        "ram": {"v": 167.1, "unit": "GiB", "measured": true, "src": "restore.py probe, docs/MEASURED.md"}
+      }
+    },
+    {
+      "id": "a100-40g",
+      "card": "A100-40G",
+      "accelerator": "A100",
+      "shape": "st",
+      "vram_gb": 40,
+      "ram_gb": 83,
+      "min_vram_gib": 36,
+      "cu_per_hour": 5.37,
+      "facts": {
+        "cu_per_hour": {"v": 5.37, "measured": false, "src": "Colab UI figure, never read from ccu-info"},
+        "vram": {"v": 39, "unit": "GiB", "measured": true, "src": "a 40 GB draw probes at ~39 GiB (scripts/restore.py)"},
+        "ram": {"v": 83, "unit": "GiB", "measured": false, "src": "Colab's standard A100 shape; not probed here"}
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "qwen38-fn",
+      "name": "Qwen3.8-Flash-Next",
+      "params": "125B-A6B MoE",
+      "quant": "EXL3 4.05 bpw",
+      "repo": "turboderp/Qwen3.8-Flash-Next-exl3",
+      "branch": "4.05bpw_h6_ng6",
+      "revision": "55a732e0c4c3d4614bc42b68493bb930d9b02c0a",
+      "dir": "/content/exl3",
+      "served_id": "qwen3.8-flash-next-exl3",
+      "bytes": 107463600896,
+      "native_ctx": 262144,
+      "vision": true,
+      "mtp": true,
+      "ngram": true,
+      "recurrent": true
+    },
+    {
+      "id": "qwen38-27b",
+      "name": "Qwen3.8-27B",
+      "params": "27B dense, hybrid DeltaNet",
+      "quant": "EXL3 3.50 bpw",
+      "repo": "turboderp/Qwen3.8-27B-exl3",
+      "branch": "3.50bpw",
+      "revision": "8351c54ef11a63e38bca978655086d7998b8a7f9",
+      "dir": "/content/models/qwen38-27b",
+      "served_id": "qwen3.8-27b-exl3",
+      "bytes": 15362272350,
+      "native_ctx": 262144,
+      "vision": true,
+      "mtp": true,
+      "ngram": false,
+      "recurrent": true
+    }
+  ],
+  "recipes": [
+    {
+      "id": "a100-80g/qwen38-fn",
+      "gpu": "a100-80g-hm",
+      "model": "qwen38-fn",
+      "status": "verified",
+      "eta_min": 11,
+      "env": {
+        "CACHE_SIZE": 500224,
+        "CACHE_QUANT": 4,
+        "CPU_CACHE_GB": 32,
+        "RECURRENT_CACHE_GB": 24,
+        "NDT": 4,
+        "GCS": 8192,
+        "VISION": 1,
+        "EXL3_VISION_PINNED": 1,
+        "YARN_FACTOR": 2,
+        "CONCURRENCY": 1
+      },
+      "facts": {
+        "prefill_tps": {"v": 3882, "measured": true, "src": "gcs sweep at 8192, docs/MEASURED.md (2,806 at gcs 2048)"},
+        "decode_tps": {"v": 97.4, "measured": true, "src": "MTP ndt 4 at a 30K context, docs/MEASURED.md"},
+        "load_s": {"v": 259.5, "measured": true, "src": "serve.sh at cache 500224, docs/MEASURED.md"},
+        "eta_min": {"v": 11, "measured": true, "src": "download 280 s + load 259.5 s + install, docs/MEASURED.md"},
+        "vram_mib": {"v": 76437, "measured": true, "src": "after load at cache 500224, gcs 4096, vision off; with gcs 8192 and the tower together: not measured"},
+        "context": {"v": 500224, "measured": false, "src": "the KV fits (measured); positions past the native 262,144 come from YaRN x2 (rope_parameters + max_position_embeddings 524288, which is how exllamav3 derives the factor); quality there not measured"},
+        "vision": {"v": true, "measured": false, "src": "the pack carries vision_k6.safetensors (561 MB); its weights sit in pinned host RAM (EXL3_VISION_PINNED) so the tower costs no VRAM for weights; image encoding speed not measured"},
+        "concurrency": {"v": 1, "measured": true, "src": "api_server serialises requests; how many live jobs would fit is computed in docs/CONCURRENCY.md, never exercised"},
+        "host_ram": {"v": "ngr 36.4 + ccs 32 + rcs 24 GiB", "measured": false, "src": "the verified run used -ccs 16 -rcs 16"}
+      }
+    },
+    {
+      "id": "a100-40g/qwen38-27b",
+      "gpu": "a100-40g",
+      "model": "qwen38-27b",
+      "status": "unmeasured",
+      "eta_min": 6,
+      "env": {
+        "CACHE_SIZE": 262144,
+        "CACHE_QUANT": 4,
+        "CPU_CACHE_GB": 16,
+        "RECURRENT_CACHE_GB": 8,
+        "NDT": 4,
+        "GCS": 4096,
+        "VISION": 1,
+        "YARN_FACTOR": 0,
+        "CONCURRENCY": 1
+      },
+      "facts": {
+        "weights": {"v": 14.31, "unit": "GiB", "measured": true, "src": "15,362,272,350 B at branch 3.50bpw (Hugging Face tree), vision tower and MTP layer included"},
+        "vram_mib": {"v": 22500, "measured": false, "src": "derived: 14.3 GiB weights + ~4.5 GiB Q4 KV at 262K (16 full-attention layers x 4 KV heads x 256) + recurrent state + staging; never loaded"},
+        "prefill_tps": {"v": null, "measured": false, "src": "never run"},
+        "decode_tps": {"v": null, "measured": false, "src": "never run"},
+        "eta_min": {"v": 6, "measured": false, "src": "15.4 GB download (~40 s at the 380 MB/s seen for the 80G pack) + install + load, never timed"},
+        "context": {"v": 262144, "measured": false, "src": "native max_position_embeddings; no YaRN in this recipe"},
+        "vision": {"v": true, "measured": false, "src": "the tower is bf16 inside the shards (preprocessor_config.json present); never loaded"},
+        "concurrency": {"v": 1, "measured": true, "src": "api_server serialises requests"},
+        "host_ram": {"v": "ccs 16 + rcs 8 GiB", "measured": false, "src": "no n-gram table in this pack, so the 83 GB shape has room"}
+      }
+    }
+  ]
+}

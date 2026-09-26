@@ -40,7 +40,7 @@ pkill -f 'api_serve[r].py' 2>/dev/null || true
 pkill -f 'cloudflare[d]' 2>/dev/null || true
 sleep 2
 
-say "starting the API (cache=${CACHE_SIZE:-262144} cq=${CACHE_QUANT:-4} ccs=${CPU_CACHE_GB:-0}GB ndt=${NDT:-4} gcs=${GCS:-4096})"
+say "starting the API for ${RECIPE:-no recipe} (${MODEL_ID:-?}: cache=${CACHE_SIZE:-262144} cq=${CACHE_QUANT:-4} ccs=${CPU_CACHE_GB:-0}GB rcs=${RECURRENT_CACHE_GB:-4}GB ndt=${NDT:-4} gcs=${GCS:-4096} vision=${VISION:-0} yarn=${YARN_FACTOR:-0})"
 status "stage=loading"
 nohup $PY -u /content/api_server.py --port "$PORT" > "$LOG" 2>&1 &
 
@@ -75,6 +75,18 @@ else
     sleep 4
   done
 fi
+
+# Everything the frontend needs to couple, in one file: it is fetched with a single
+# `colab download` (the contents API -- `colab exec` goes through the kernel and can
+# hang). Written before STATUS says ready, so a reader never sees a stale URL.
+$PY - "$URL" "$PORT" "${RECIPE:-}" "${MODEL_ID:-}" <<'PY'
+import json, pathlib, sys, time
+url, port, recipe, model = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+key = pathlib.Path("/content/api-key.txt").read_text().strip()
+pathlib.Path("/content/endpoint.json").write_text(json.dumps(
+    {"url": url or None, "port": port, "key": key, "at": int(time.time()),
+     "recipe": recipe or None, "model": model or None}))
+PY
 
 if [[ -n "$URL" ]]; then
   printf '%s\n' "$URL" > /content/url.txt
