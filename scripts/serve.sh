@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # collabosm serve (runs ON the Colab VM).
 #
-#   source /content/collabosm.env && bash serve.sh
+#   bash /content/serve.sh          (reads /content/collabosm.env itself)
 #
 # Starts the OpenAI-compatible API (scripts/api_server.py) with the measured-best
 # ExLlamaV3 settings, then a cloudflared quick tunnel, and writes /content/STATUS.
+# scripts/up.sh chains this after bootstrap.sh; run it by hand to restart the API.
 set -uo pipefail
 
 LOG=/content/serve.log
@@ -16,7 +17,11 @@ PY=${PY:-python3}
 say() { echo "[serve $(date -u +%H:%M:%S)] $*"; }
 status() { echo "$*" > "$STATUS"; }
 
-[[ -f /content/collabosm.env ]] && source /content/collabosm.env
+# Exported, not merely set: api_server.py reads CACHE_SIZE, CPU_CACHE_GB, GCS ... from
+# its environment. A plain `source` sets them for this shell only, so the log line
+# below printed the intended values while the server quietly ran on its defaults
+# (262144 tokens, no pinned-RAM tier, gcs 4096).
+if [[ -f /content/collabosm.env ]]; then set -a; source /content/collabosm.env; set +a; fi
 : "${PORT:=8090}"
 
 [[ -f "$KEY_FILE" ]] || $PY - <<'PY'
