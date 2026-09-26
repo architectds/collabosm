@@ -336,6 +336,12 @@ def main() -> int:
     ap.add_argument("--max-session-h", type=float, default=6.0)
     ap.add_argument("--state-dir", default=None,
                     help="where ledger.json lives (default ~/.collabosm)")
+    ap.add_argument("--external-endpoint", default=os.environ.get("COLLABOSM_EXTERNAL"),
+                    help="proxy /v1/* straight to an endpoint that is already running "
+                         "(no Colab, no CU, no auto-stop): e.g. http://127.0.0.1:11435/v1")
+    ap.add_argument("--external-key", default=os.environ.get("COLLABOSM_EXTERNAL_KEY"))
+    ap.add_argument("--external-model", default=None,
+                    help="label to show in the rail for --external-endpoint")
     ARGS = ap.parse_args()
     if ARGS.mock:
         CONTROL = DemoControl(mock_speed=ARGS.mock_speed)
@@ -349,10 +355,16 @@ def main() -> int:
                                    distro=ARGS.wsl_distro, budget_cu=ARGS.budget_cu,
                                    idle_stop_min=ARGS.idle_stop_min,
                                    max_session_h=ARGS.max_session_h,
-                                   fake=ARGS.fake_provision, state_dir=ARGS.state_dir)
+                                   fake=ARGS.fake_provision, state_dir=ARGS.state_dir,
+                                   external=ARGS.external_endpoint,
+                                   external_key=ARGS.external_key,
+                                   external_model=ARGS.external_model)
         print("[fe] control    %s -> wsl -d %s (idle stop %d min, budget %.0f CU)"
               % ("rehearsal" if ARGS.fake_provision else "colab", ARGS.wsl_distro,
                  ARGS.idle_stop_min, ARGS.budget_cu), flush=True)
+        if ARGS.external_endpoint:
+            print("[fe] external   %s (nothing billed, nothing auto-stopped)"
+                  % ARGS.external_endpoint, flush=True)
     if not os.path.isfile(os.path.join(UPSTREAM, "index.html")):
         print("!! upstream/index.html missing -- the vendored WebUI build is not here",
               file=sys.stderr)

@@ -94,8 +94,10 @@ async function post(path, body) {
 function render() {
   if (!st) return;
   const busy = BUSY.includes(st.stage), ready = st.stage === 'ready';
+  const attached = st.stage === 'attached';
   const ep = st.endpoint || {}, cli = st.cli || {}, bill = st.billing || {}, m = st.measured || {};
-  $('hdr').textContent = ready ? ('已就绪 · ' + st.live_model)
+  $('hdr').textContent = attached ? ('外部端点 · ' + st.live_model)
+    : ready ? ('已就绪 · ' + st.live_model)
     : (busy ? (st.stage_label + ' · ' + fmt(st.progress, 0) + '%')
             : (st.stage === 'idle' ? '无卡无模型' : st.stage_label));
   $('stop').hidden = !(busy || ready);
@@ -112,7 +114,15 @@ function render() {
     h += '<button class="btn go" id="go">开始（现在开始计费）</button>' +
          '<button class="btn no" id="cancel">取消</button></div>';
   }
-  if (ready) {
+  if (attached) {
+    h += '<div class="card ok">' +
+         row('模式', '外部端点') +
+         row('模型', esc(st.live_model)) +
+         row('端点', '<code>' + esc(ep.base || '—') + '</code>') +
+         '<div class="meta">我们没启动它，所以既不计费、也不会被自动停机；' +
+         '要申请自己的卡就重启前端、别带 --external-endpoint。</div>' +
+         '<button class="btn no" id="stop2">断开（只是不再指向它）</button></div>';
+  } else if (ready) {
     h += '<div class="card ok">' +
          row('模型', esc(st.live_model) + '<span class="pill">MTP</span>') +
          row('端点', '<code>' + esc(ep.base || '—') + '</code>') +
@@ -132,7 +142,7 @@ function render() {
   // ---- recipes ---------------------------------------------------------- //
   h += '<h4>卡与配方</h4>';
   for (const r of st.recipes) {
-    const sel = st.selected === r.id, dis = (busy || ready || st.confirm) ? 'disabled' : '';
+    const sel = st.selected === r.id, dis = (busy || ready || attached || st.confirm) ? 'disabled' : '';
     h += '<div class="card"><b>' + esc(r.card) + '</b>' + (sel ? '<span class="pill">当前</span>' : '') +
          (r.verified ? '' : '<span class="pill">未实测</span>') +
          '<div class="meta">' + esc(r.model) + ' · ' + esc(r.quant) + '</div>' +

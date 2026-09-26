@@ -96,7 +96,8 @@ MEASURED_REFERENCE = {"prefill": 2806.0, "prefill_gcs8192": 3882.0, "decode": 97
 
 STAGE_LABEL = {"idle": "无卡无模型", "requesting": "申请中", "uploading": "上传工具包",
                "bootstrapping": "安装与下载", "loading": "写入显存", "ready": "已就绪",
-               "stopping": "正在停机", "stopped": "已停机", "failed": "失败"}
+               "stopping": "正在停机", "stopped": "已停机", "failed": "失败",
+               "attached": "已连接外部端点"}
 
 STAGE_NOTE = {
     "requesting": "向 Colab 申请实例并校验形状；抽到 40 GB 会自动退回（约 0.13 CU）",
@@ -141,17 +142,34 @@ def _wsl_path(win_path: str) -> str:
     return "/mnt/%s/%s" % (m.group(1).lower(), m.group(2)) if m else p
 
 
+def _root_of(base: str) -> str:
+    """`http://host/v1` -> `http://host`.
+
+    The rail shows the endpoint the way a human writes it (with /v1), but the
+    proxy appends the *incoming* path, which already starts with /v1 -- so the
+    base it forwards to must be the root, or every request becomes /v1/v1/...
+    """
+    trimmed = base.rstrip("/")
+    return trimmed[:-3] if trimmed.endswith("/v1") else trimmed
+
+
 class Control:
     """status() / select() / stop() -- the whole contract the shell needs."""
 
     def __init__(self, root: str, *, session: str = "collabosm", distro: str = "Ubuntu",
                  budget_cu: float = 200.0, idle_stop_min: int = 20,
                  max_session_h: float = 6.0, fake: bool = False,
-                 state_dir: str | None = None):
+                 state_dir: str | None = None,
+                 external: str | None = None, external_key: str | None = None,
+                 external_model: str | None = None):
         self.root = os.path.abspath(root)
         self.session = session
         self.distro = distro
         self.fake = fake
+        # An endpoint that is already running -- a local llama-server, someone
+        # else's box, anything OpenAI-compatible. Nothing here is billed and
+        # nothing here is ever stopped automatically: we did not start it.
+        self.external = external.rstrip("/") if external else None
         self.budget_cu = float(budget_cu)
         self.idle_stop_min = int(idle_stop_min)
         self.max_session_h = float(max_session_h)
@@ -203,6 +221,14 @@ class Control:
             "outgoing_model": None,
         }
         self._refresh_money()
+        if self.external:
+            with self.lock:
+                self.state.update(
+                    stage="attached", stage_label=STAGE_LABEL["attached"], progress=100.0,
+                    live_model=external_model or "external",
+                    progress_note="外部端点已接上；不会计费，也不会被自动停机",
+                    endpoint={"base": self.external, "key": external_key, "key_pending": False},
+                    footnote="外部端点：%s（本机没有申请实例）" % self.external)
         threading.Thread(target=self._watch, daemon=True).start()
         threading.Thread(target=self._probe_cli, daemon=True).start()
 
@@ -282,6 +308,10 @@ class Control:
             return {"ok": False, "code": "unknown_recipe", "message": "没有这个配方"}
         with self.lock:
             stage = self.state["stage"]
+            if stage == "attached":
+                return {"ok": False, "code": "attached",
+                        "message": "现在接的是外部端点 %s。要申请自己的卡就重启前端、别带 "
+                                   "--external-endpoint" % self.external}
             if stage in ("requesting", "uploading", "bootstrapping", "loading", "stopping"):
                 return {"ok": False, "code": "busy",
                         "message": "正在忙：%s" % self.state["progress_note"]}
@@ -325,6 +355,13 @@ class Control:
     def stop(self, reason: str = "manual") -> dict:
         with self.lock:
             stage = self.state["stage"]
+            if stage == "attached":
+                self.state.update(stage="idle", stage_label=STAGE_LABEL["idle"], progress=0.0,
+                                  live_model=None, metrics=None,
+                                  endpoint={"base": None, "key": None, "key_pending": False},
+                                  progress_note="已断开外部端点（没有实例可以停）",
+                                  footnote="控制面：WSL -> colab CLI -> restore.py -> up.sh")
+                return {"ok": True, "code": "detached", "message": "已断开外部端点"}
             if stage in ("idle", "stopped", "failed"):
                 return {"ok": True, "code": "nothing_to_stop",
                         "message": "现在没有在计费的实例"}
@@ -350,9 +387,11 @@ class Control:
             # The rehearsal endpoint is a placeholder host, so keep talking to
             # --backend (the loopback stub) instead of trying to resolve it.
             return None
+        if self.external and self.state["stage"] == "attached":
+            return _root_of(self.external)
         ep = self.state["endpoint"]
         base = ep.get("base")
-        return base if self.state["stage"] == "ready" and base else None
+        return _root_of(base) if self.state["stage"] == "ready" and base else None
 
     def api_key(self):
         return self.state["endpoint"].get("key")
