@@ -79,7 +79,7 @@ engine, which is what it was built for.
 ## Repository state
 
 - `c3d4458` — pushed: incremental streaming, the Responses lifecycle fix, `dev_stub.py`,
-  `check_surface.py`, README section "Testing it without a GPU".
+  `check_surface.py`, README section "Testing it without a GPU" (now in `docs/DEVELOPER.md`).
 - `a999ba7` -- pushed: the mirrored Job construction, the non-empty blocking fallback, and
   `dev_stub.py --silent`. Deployed to the A100 and verified there before the session was stopped.
 - The VM keeps the server at `/content/api_server.py` (flat, not `/content/collabosm/...`), so
