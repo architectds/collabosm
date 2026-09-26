@@ -10,7 +10,8 @@ Why this script exists
    Observed twice on 2026-09-24, once mid-run with /content fully intact.
 
 2. `colab new --gpu A100` never sends `shape`, so it is a lottery between
-   80 GB High-RAM (167 GB RAM, 7.52 CU/h) and 40 GB standard (83 GB RAM, 5.37 CU/h).
+   80 GB High-RAM (167 GB RAM, 6.77 CU/h as Colab reports it) and 40 GB standard (83 GB RAM,
+   5.37 CU/h by Colab's published figure).
    The 40 GB box cannot load this model: the 4.05 bpw pack is ~100 GiB on disk with
    ~63.6 GiB of weights that must be VRAM-resident. Eleven consecutive unpatched
    attempts gave 40 GB. This requests HIGH_RAM explicitly (google-colab-cli#47:
@@ -124,7 +125,11 @@ def _variant():
 
 
 def create_high_ram(state, SessionState, name, accelerator, shape_code):
-    """Assign a new runtime, actually sending `shape` (the upstream gap)."""
+    """Assign a new runtime, actually sending `shape=hm` (the upstream gap).
+
+    `st` sends no shape at all: Colab's default is the standard 40 GB shape (every
+    unpatched draw in colab.log came back machineShape 0), while `shape=st` itself
+    has never been sent and is not known to be accepted."""
     from urllib.parse import urljoin
 
     import requests
@@ -140,7 +145,8 @@ def create_high_ram(state, SessionState, name, accelerator, shape_code):
             params["variant"] = variant.value
         if accelerator:
             params["accelerator"] = accelerator.value
-        params["shape"] = shape_code          # <-- the only added field
+        if shape_code == "hm":
+            params["shape"] = shape_code      # <-- the only added field
         return requests.Request("GET", url, params=params).prepare().url
 
     C.Client._build_assign_url = _build
@@ -220,6 +226,20 @@ def main():
 
     mine = state.store.get(args.name)
     caught = claimed_endpoints(except_name=args.name)
+    # Our record names a box the listing does not show: list_assignments has been seen
+    # to leave out a live box for a few seconds. Creating a VM on that one snapshot
+    # would leave the first one billing with no record, so ask twice more first.
+    for _ in range(2):
+        if not mine or any(a.endpoint == mine.endpoint for a in live):
+            break
+        print("[restore] %s is not listed; asking again in 5 s before treating it as gone"
+              % mine.endpoint)
+        time.sleep(5)
+        try:
+            live = list(state.client.list_assignments())
+        except Exception as exc:
+            print("[restore] cannot read assignments: %r" % exc)
+            return 5
 
     # ---- 1. refresh our own registration, if the VM is still ours
     if mine and any(a.endpoint == mine.endpoint for a in live):
@@ -272,10 +292,10 @@ def main():
                   % (info.get("device"), vram or -1, info.get("ram_GiB"), info.get("cc"),
                      info.get("python"), info.get("disk_free")))
             if vram is not None and vram < args.min_vram_gib:
-                print("[restore] !! %.1f GiB VRAM is below the %.1f GiB this model needs."
+                print("[restore] !! %.1f GiB VRAM is below the %.1f GiB this recipe needs."
                       % (vram, args.min_vram_gib))
-                print("[restore]    ~63.6 GiB of weights must be VRAM-resident, so a 40 GB")
-                print("[restore]    (standard) box cannot load this model at all.")
+                print("[restore]    Its weights and cache must be VRAM-resident, so this box")
+                print("[restore]    cannot load it at all (Flash-Next: ~63.6 GiB of weights).")
                 if created or args.shape == "hm":
                     print("[restore]    stopping %s now, before any download; exit 6" % args.name)
                     stop_session(args.colab, args.name)
