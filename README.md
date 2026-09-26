@@ -29,9 +29,9 @@ Every step is explained below.
 2. [Install](#2-install)
 3. [Connect your Colab (first time only)](#3-connect-your-colab-first-time-only)
 4. [Everyday use](#4-everyday-use): open the app, start a GPU, chat, **stop the GPU**, switch
-   models, see what you spent
-5. [Use the model in other programs](#5-use-the-model-in-other-programs): Codex, Open WebUI, your
-   own scripts, another device
+   models, see what you spent, check the connection
+5. [Use the model in other programs](#5-use-the-model-in-other-programs): Codex, ModelDock,
+   Open WebUI, your own scripts, another device
 6. [Troubleshooting](#6-troubleshooting)
 7. [Update or uninstall](#7-update-or-uninstall)
 - [Appendix](#appendix): try it without paying, what it costs, the command line, how it works and
@@ -196,6 +196,24 @@ The **Compute units** section shows your balance as Colab reports it, how fast i
 now, and how long it would last at that rate. While a GPU runs, the status area also shows how long
 it has been billed. Colab's own site shows the same balance.
 
+### Check the connection
+
+The **Tunnel** section shows whether the GPU's address answers, how fast, and when it was last
+checked (every 20 seconds). When the address stops answering, the section opens by itself and says
+which part stopped:
+- the tunnel program on the GPU machine,
+- the model server there,
+- the way from your computer to Cloudflare (network, VPN or DNS),
+- or the GPU machine itself.
+
+It can tell these apart because of the **heartbeat**. Every 10 minutes while you use the GPU,
+collabosm runs a short health check on the GPU machine through Colab, not through the tunnel. This
+also keeps the GPU yours: Colab takes a machine back after about 20 minutes without that kind of
+activity, and chat through the tunnel does not count. Every heartbeat is also saved on your computer
+in `~/.collabosm/heartbeat.jsonl`, so there is a record even when a GPU disappears.
+
+The **Speed** section shows the speed of the last request from any program, not only this chat.
+
 ### Handy to know
 
 - **Languages:** EN / 中 / 日 in the top bar.
@@ -238,6 +256,19 @@ While no GPU is running, these programs get the answer "No instance is running".
 
 Codex's file-editing tool (`apply_patch`) needs one more setting; see
 [docs/DEVELOPER.md](docs/DEVELOPER.md#tool-calls-end-to-end-through-codex).
+
+### ModelDock
+
+In ModelDock's dashboard, add a custom model with the address `http://127.0.0.1:3020/v1`, any key
+(for example `sk-local`), and the Responses transport.
+- **Add it while a GPU is running:** ModelDock asks the address for its models when you add it.
+- **This address never changes,** so you don't have to edit ModelDock again when you start a new
+  GPU. The `….trycloudflare.com` address does change with every GPU.
+- **An existing `trycloudflare.com` entry:** the dashboard cannot edit an address, so remove it and
+  add it again with the address above.
+- **ModelDock treats an address on this computer as a local engine.** It shortens long
+  conversations itself, without asking the model, and adds a few instructions meant for local
+  engines.
 
 ### Open WebUI
 
@@ -291,6 +322,8 @@ every request itself, so the page never holds it until you press the key button.
 | Chat says "No instance is running" | No GPU is running. Start one and wait for **Ready**. |
 | "drew a card below the recipe's VRAM" | Colab handed out a smaller GPU than the model needs; collabosm gave it back (~0.13 compute units). Press **Start** again. |
 | "The VM is gone" | Colab took the GPU back, or it was stopped somewhere else. Its billing is closed. |
+| The **Tunnel** section says the tunnel is down | Read what it says stopped. The tunnel program or the model server: press **Reconnect**; if that does not help, **Stop** and **Start**. The way from your computer: check your network or VPN. |
+| A program says "HTTP Error 530" | It uses the `….trycloudflare.com` address, and the tunnel is down. Point it at `http://127.0.0.1:3020/v1` instead ([Use the model in other programs](#5-use-the-model-in-other-programs)); the **Tunnel** section says what happened. |
 | "the stop could not sign in" | Press **Connect again** in the Colab section, then **Stop** again. Until then the GPU may still be billing. |
 | Is anything still billing? | The **Connection** section lists what Colab is running on your account right now. |
 

@@ -171,10 +171,12 @@ Two facts about the served model that cost real time to find:
 | shape sent for a 40 GB card | none | 13 unpatched `assign` calls in `colab.log` came back `machineShape 0`; `shape=st` has never been sent |
 
 Chat through the tunnel does not count as use, and neither, on its own, does the keep-alive ping:
-the second box above was pinged every 3 minutes. The kernel does. So while a box is in use the
-frontend's keep-alive also runs one trivial statement on the kernel (`colab_keepalive.py --touch`,
-`docs/RUNBOOK.md`, cost guardrails). The touch is not yet proven on a live box: the next session
-running longer than 30 minutes on tunnel traffic alone is that test.
+the second box above was pinged every 3 minutes. The kernel does, as google-colab-cli 0.7.4's README
+now says too ("Sessions stay alive as long as the kernel is active"; 0.7.4 dropped the keep-alive
+ping altogether). So while a box is in use the frontend runs scripts/heartbeat.py on the kernel
+every 10 minutes (`colab_keepalive.py --heartbeat`, `docs/RUNBOOK.md`, cost guardrails). The
+heartbeat is not yet proven on a live box: the next session running longer than 30 minutes on tunnel
+traffic alone is that test.
 
 The CLI's local session record goes missing about once an hour in every long run, the VM intact.
 The CLI drops it when `list_assignments` briefly leaves the endpoint out, and when a call to the VM

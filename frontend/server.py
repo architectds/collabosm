@@ -93,12 +93,20 @@ NO_LIVE_SESSION = {
 
 
 class Meter:
-    """Times one proxied chat turn from the bytes that pass through.
+    """Times one proxied turn from the bytes that pass through, in either dialect:
+    /v1/chat/completions chunks, or /v1/responses events (what Codex and ModelDock
+    send when they are pointed at this address).
 
     Rates come from the server's own `timings` (llama.cpp's field, which
-    api_server sends on the last chunk); without them only the proxy's
-    first-token time is kept -- no tokens-per-second is invented from characters.
+    api_server sends on the last chat chunk); without them only the proxy's
+    first-token time and the token counts are kept -- no tokens-per-second is
+    invented from characters. A Responses turn carries no timings, and its rates
+    are filled in from /v1/status's last_timings (control.py _absorb_server).
     """
+
+    # the Responses events that carry the first generated text
+    FIRST = ("response.output_text.delta", "response.reasoning_text.delta",
+             "response.custom_tool_call_input.delta", "response.function_call_arguments.delta")
 
     def __init__(self):
         self.t0 = time.time()
@@ -116,7 +124,8 @@ class Meter:
         self._take(ev)
         if self.ttft is None:
             d = ((ev.get("choices") or [{}])[0] or {}).get("delta") or {}
-            if d.get("content") or d.get("reasoning_content"):
+            if d.get("content") or d.get("reasoning_content") or (
+                    ev.get("type") in self.FIRST and ev.get("delta")):
                 self.ttft = time.time() - self.t0
 
     def whole(self, data: bytes) -> None:
@@ -129,11 +138,17 @@ class Meter:
         if isinstance(ev, dict):
             self.timings = ev.get("timings") or self.timings
             self.usage = ev.get("usage") or self.usage
+            if isinstance(ev.get("response"), dict):       # response.completed / .incomplete
+                self.usage = ev["response"].get("usage") or self.usage
 
     def result(self):
         if self.ttft is None and not self.timings:
             return None                    # an error or an empty turn: nothing measured
         t, u = self.timings or {}, self.usage or {}
+        # usage in either dialect: prompt/completion_tokens, or input/output_tokens
+        total = u.get("prompt_tokens", u.get("input_tokens"))
+        cached = (u.get("prompt_tokens_details") or u.get("input_tokens_details") or {}).get("cached_tokens")
+        new = (total - (cached or 0)) if isinstance(total, int) else None
 
         def rate(n, ms, given):
             if given:
@@ -145,12 +160,11 @@ class Meter:
                 "prefill": rate(t.get("prompt_n"), t.get("prompt_ms"), t.get("prompt_per_second")),
                 "decode": rate(t.get("predicted_n"), t.get("predicted_ms"),
                                t.get("predicted_per_second")),
-                "prompt_n": t.get("prompt_n", u.get("prompt_tokens")),
-                # the whole prompt: llama.cpp's prompt_n leaves out the cached prefix
-                "prompt_total": (((t.get("prompt_n") or 0) + (t.get("cache_n") or 0)) if t
-                                 else u.get("prompt_tokens")),
-                "cache_n": t.get("cache_n", (u.get("prompt_tokens_details") or {}).get("cached_tokens")),
-                "predicted_n": t.get("predicted_n", u.get("completion_tokens"))}
+                # llama.cpp's prompt_n leaves out the cached prefix; so does this one
+                "prompt_n": t.get("prompt_n", new),
+                "prompt_total": (((t.get("prompt_n") or 0) + (t.get("cache_n") or 0)) if t else total),
+                "cache_n": t.get("cache_n", cached),
+                "predicted_n": t.get("predicted_n", u.get("completion_tokens", u.get("output_tokens")))}
 
 
 def _names_this_server(hostport: str) -> bool:
@@ -240,7 +254,7 @@ class Handler(BaseHTTPRequestHandler):
         if live and CONTROL.api_key():
             req.add_header("Authorization", "Bearer " + CONTROL.api_key())
         meter = (Meter() if self.command == "POST"
-                 and self.path.split("?")[0].endswith("/chat/completions") else None)
+                 and self.path.split("?")[0].endswith(("/chat/completions", "/responses")) else None)
         try:
             with urllib.request.urlopen(req, timeout=ARGS.timeout) as resp:
                 self.send_response(resp.status)

@@ -308,6 +308,9 @@
   .list li:first-child { border-top: 0; }
   .list li .ico { color: var(--muted); }
   .list li .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .list.kv li > span { color: var(--muted); white-space: nowrap; }
+  .list.kv li > b { margin-left: auto; min-width: 0; font-weight: 600; font-variant-numeric: tabular-nums;
+    text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   details { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
   details + details { margin-top: 12px; }
   summary {
@@ -362,6 +365,7 @@
     <section id="s-status"></section>
     <section class="fold" id="f-gpus"></section>
     <section class="fold" id="f-speed"></section>
+    <section class="fold" id="f-tunnel"></section>
     <section class="fold" id="f-conn"></section>
     <section class="fold" id="f-log"></section>
   </aside>
@@ -476,6 +480,27 @@ const I18N = {
     'speed.where': 'Measured for {recipe}, not in this session.',
     'speed.none': 'No speed measured for {recipe} yet.',
     'sec.conn': 'Connection', 'conn.sum': '{n} billing',
+    'sec.tunnel': 'Tunnel', 'tunnel.none': 'No tunnel: nothing is running.',
+    'tunnel.addr': 'Address', 'tunnel.state': 'Status', 'tunnel.checked': 'Last check',
+    'tunnel.up': 'answers · {ms} ms', 'tunnel.down': 'down {for} · {code}', 'tunnel.checking': 'checking…',
+    'tunnel.sum.down': 'down {for}', 'tunnel.ago': '{ago} ago', 'tunnel.noanswer': 'no answer',
+    'tunnel.code.530': 'no connection (530)', 'tunnel.code.502': 'server not answering (502)',
+    'tunnel.cause.checking': 'Asking the GPU machine, over Colab, which part stopped…',
+    'tunnel.cause.tunnel_process': 'The tunnel program on the GPU machine has stopped. The GPU and the model are fine, and still billing.',
+    'tunnel.cause.server': 'The model server on the GPU machine is not answering. The machine itself is up, and still billing.',
+    'tunnel.cause.local_path': 'The address works from the GPU machine itself, so the problem is between this computer and Cloudflare: network, VPN or DNS.',
+    'tunnel.cause.tunnel_edge': 'The tunnel program is running, but Cloudflare cannot reach it. It usually reconnects by itself within a minute or two.',
+    'tunnel.cause.vm_unreachable': 'The GPU machine does not answer over Colab either. Checking whether Colab took it back…',
+    'tunnel.box': 'Seen from the GPU machine', 'tunnel.box.tag': 'heartbeat',
+    'tunnel.server': 'Model server', 'tunnel.proc': 'Tunnel program', 'tunnel.public': 'Address, from there',
+    'tunnel.ok': 'answers', 'tunnel.running': 'running', 'tunnel.stopped': 'stopped',
+    'tunnel.server.bad': 'not answering ({code})',
+    'tunnel.beat.at': 'Heartbeat {ago} ago, over Colab.',
+    'tunnel.beat.none': 'No heartbeat yet. One runs every 10 minutes while the GPU is in use.',
+    'tunnel.beat.err': 'Last heartbeat failed: {err}',
+    'tip.beat': 'Every 10 minutes while the GPU is in use, this app runs a short health check on the GPU machine through Colab, not through the tunnel. Colab counts that as use, which keeps the machine; chat through the tunnel does not count. Each result is also saved on this computer, in ~/.collabosm/heartbeat.jsonl.',
+    'tip.tunnel.state': 'Checked every 20 s through the tunnel. 530: Cloudflare has no connection to the GPU machine. 502: the tunnel is up, but the model server is not answering.',
+    'speed.src.direct': 'Last request, timed by the server. It came from another client, not through this app · {ago} ago.',
     'sec.colab': 'Colab',
     'colab.sum.ok': '{account}',
     'colab.sum.todo': '{n}/3 · {step}',
@@ -697,6 +722,27 @@ const I18N = {
     'speed.where': '{recipe} 的实测值，不是本次会话的数字。',
     'speed.none': '{recipe} 还没有实测速度。',
     'sec.conn': '连接', 'conn.sum': '{n} 个计费',
+    'sec.tunnel': '隧道', 'tunnel.none': '没有隧道：当前没有运行中的机器。',
+    'tunnel.addr': '地址', 'tunnel.state': '状态', 'tunnel.checked': '上次检查',
+    'tunnel.up': '畅通 · {ms} ms', 'tunnel.down': '断开 {for} · {code}', 'tunnel.checking': '检查中…',
+    'tunnel.sum.down': '断开 {for}', 'tunnel.ago': '{ago}前', 'tunnel.noanswer': '无响应',
+    'tunnel.code.530': '没有连接 (530)', 'tunnel.code.502': '服务无响应 (502)',
+    'tunnel.cause.checking': '正在通过 Colab 询问 GPU 机器，是哪一部分停了…',
+    'tunnel.cause.tunnel_process': 'GPU 机器上的隧道程序停了。GPU 和模型都正常，仍在计费。',
+    'tunnel.cause.server': 'GPU 机器上的模型服务没有响应。机器本身还在，仍在计费。',
+    'tunnel.cause.local_path': '从 GPU 机器本身访问这个地址是通的，问题在这台电脑和 Cloudflare 之间：网络、VPN 或 DNS。',
+    'tunnel.cause.tunnel_edge': '隧道程序在运行，但 Cloudflare 连不到它。通常一两分钟内会自己重连。',
+    'tunnel.cause.vm_unreachable': 'GPU 机器通过 Colab 也没有响应。正在确认 Colab 是否已经收回它…',
+    'tunnel.box': '从 GPU 机器上看', 'tunnel.box.tag': '心跳',
+    'tunnel.server': '模型服务', 'tunnel.proc': '隧道程序', 'tunnel.public': '从那边访问地址',
+    'tunnel.ok': '正常', 'tunnel.running': '运行中', 'tunnel.stopped': '已停止',
+    'tunnel.server.bad': '无响应（{code}）',
+    'tunnel.beat.at': '{ago}前的心跳，经 Colab。',
+    'tunnel.beat.none': '还没有心跳。GPU 使用期间每 10 分钟一次。',
+    'tunnel.beat.err': '上次心跳失败：{err}',
+    'tip.beat': 'GPU 使用期间，本应用每 10 分钟通过 Colab（不经过隧道）在 GPU 机器上做一次简短的健康检查。Colab 把这算作使用，机器因此会保留；经隧道的聊天不算。每次的结果也保存在这台电脑的 ~/.collabosm/heartbeat.jsonl 里。',
+    'tip.tunnel.state': '每 20 秒经隧道检查一次。530：Cloudflare 与 GPU 机器之间没有连接。502：隧道通着，但模型服务没有响应。',
+    'speed.src.direct': '最近一次请求，服务端计时。它来自其他客户端，没有经过本应用 · {ago}前。',
     'sec.colab': 'Colab',
     'colab.sum.ok': '{account}',
     'colab.sum.todo': '{n}/3 · {step}',
@@ -917,6 +963,27 @@ const I18N = {
     'speed.where': '{recipe} の実測値で、このセッションの数値ではありません。',
     'speed.none': '{recipe} の速度はまだ実測していません。',
     'sec.conn': '接続', 'conn.sum': '課金中 {n}',
+    'sec.tunnel': 'トンネル', 'tunnel.none': 'トンネルはありません：稼働中のマシンがありません。',
+    'tunnel.addr': 'アドレス', 'tunnel.state': '状態', 'tunnel.checked': '最終確認',
+    'tunnel.up': '応答あり · {ms} ms', 'tunnel.down': '切断 {for} · {code}', 'tunnel.checking': '確認中…',
+    'tunnel.sum.down': '切断 {for}', 'tunnel.ago': '{ago}前', 'tunnel.noanswer': '応答なし',
+    'tunnel.code.530': '接続なし (530)', 'tunnel.code.502': 'サーバー応答なし (502)',
+    'tunnel.cause.checking': 'どの部分が止まったか、Colab 経由で GPU マシンに確認しています…',
+    'tunnel.cause.tunnel_process': 'GPU マシン上のトンネルプログラムが停止しました。GPU とモデルは正常で、課金は続いています。',
+    'tunnel.cause.server': 'GPU マシン上のモデルサーバーが応答しません。マシン自体は稼働中で、課金は続いています。',
+    'tunnel.cause.local_path': 'GPU マシン自身からはアドレスにつながります。問題はこのコンピューターと Cloudflare の間（ネットワーク、VPN、DNS）にあります。',
+    'tunnel.cause.tunnel_edge': 'トンネルプログラムは動いていますが、Cloudflare から届きません。通常は 1〜2 分で自動的に再接続します。',
+    'tunnel.cause.vm_unreachable': 'GPU マシンは Colab 経由でも応答しません。Colab が回収したかどうか確認しています…',
+    'tunnel.box': 'GPU マシン側から', 'tunnel.box.tag': 'ハートビート',
+    'tunnel.server': 'モデルサーバー', 'tunnel.proc': 'トンネルプログラム', 'tunnel.public': 'そこからのアドレス',
+    'tunnel.ok': '応答あり', 'tunnel.running': '稼働中', 'tunnel.stopped': '停止',
+    'tunnel.server.bad': '応答なし（{code}）',
+    'tunnel.beat.at': '{ago}前のハートビート（Colab 経由）。',
+    'tunnel.beat.none': 'まだハートビートはありません。GPU の使用中は 10 分ごとに実行します。',
+    'tunnel.beat.err': '直近のハートビートは失敗しました：{err}',
+    'tip.beat': 'GPU の使用中、このアプリは 10 分ごとに、トンネルではなく Colab 経由で GPU マシンの簡単なヘルスチェックを実行します。Colab はこれを使用と見なすため、マシンは保持されます。トンネル経由のチャットは使用と見なされません。結果はこのコンピューターの ~/.collabosm/heartbeat.jsonl にも保存されます。',
+    'tip.tunnel.state': 'トンネル経由で 20 秒ごとに確認します。530：Cloudflare と GPU マシンの接続がありません。502：トンネルは通じていますが、モデルサーバーが応答しません。',
+    'speed.src.direct': '直近のリクエスト（サーバー計測）。このアプリを経由しない別のクライアントからのものです · {ago}前。',
     'sec.colab': 'Colab',
     'colab.sum.ok': '{account}',
     'colab.sum.todo': '{n}/3 · {step}',
@@ -1255,6 +1322,7 @@ function isOpen(id) {
   if (id === 'colab') return true;      // open on the first launch; the viewer's choice after that
   if (id === 'gpus') return ['idle', 'stopped', 'failed'].includes(s) || !!(st && st.confirm);
   if (id === 'log') return s === 'failed';
+  if (id === 'tunnel') return !!(st && st.tunnel && st.tunnel.state === 'down');
   return false;
 }
 
@@ -1607,6 +1675,39 @@ function speedHTML() {
   return h;
 }
 
+// ---- the tunnel: is the public address answering, and if not, which part stopped -- //
+// control.py _tunnel_view: /health through the tunnel says that it stopped; a heartbeat
+// taken since, over Colab's own channel, says what (tunnel program, model server, the
+// way from here, or the machine).
+function tunnelView() { return (st && st.tunnel) || { state: 'none' }; }
+
+function kvRow(icon, label, key, cls) {
+  return '<li data-t="' + key + '" tabindex="0">' + ico(icon) + '<span>' + esc(t(label)) + '</span>'
+    + '<b' + (cls ? ' class="' + cls + '"' : '') + ' data-v="' + key + '"></b></li>';
+}
+
+function tunnelHTML() {
+  const tv = tunnelView();
+  if (tv.state === 'none') return '<p class="fine">' + esc(t('tunnel.none')) + '</p>';
+  let h = '<ul class="list kv">' + kvRow('link', 'tunnel.addr', 'tun-host', 'mono')
+    + kvRow('pulse', 'tunnel.state', 'tun-state') + kvRow('clock', 'tunnel.checked', 'tun-checked') + '</ul>'
+    + '<p class="note" data-v="tun-cause"></p>';
+  if (st.stage !== 'ready') return h;           // an attached endpoint is not our box to ask
+  h += '<div class="blk"><div class="sub">' + ico('server') + '<span>' + esc(t('tunnel.box')) + '</span>'
+    + '<span class="tag" data-t="beat" tabindex="0">' + esc(t('tunnel.box.tag')) + '</span></div>';
+  if (tv.beat) {
+    h += '<ul class="list kv">' + kvRow('server', 'tunnel.server', 'tun-server')
+      + kvRow('plug', 'tunnel.proc', 'tun-proc') + kvRow('cloud', 'tunnel.public', 'tun-public') + '</ul>';
+  }
+  return h + '<p class="fine" data-v="tun-beat"></p></div>';
+}
+
+function codeWord(code) {
+  if (!code) return t('tunnel.noanswer');
+  if (code === 530 || code === 502) return t('tunnel.code.' + code);
+  return 'HTTP ' + code;
+}
+
 // ---- connection, log ------------------------------------------------------------ //
 function details(id, summary, body) {
   return '<details data-d="' + id + '"' + (openDetails.has(id) ? ' open' : '') + '><summary>'
@@ -1700,7 +1801,8 @@ function bindValues() {
     const hit = m.prompt_total ? (100 * (m.cache_n || 0)) / m.prompt_total : null;
     v.ttft = m.ttft_s == null ? '—' : num(m.ttft_s, 2) + ' s';
     v.hit = hit === null ? '—' : num(hit, 0) + '%';
-    v.speedsrc = t(m.source === 'server' ? 'speed.src.server' : 'speed.src.proxy', { ago: ago(m.at) });
+    v.speedsrc = t(m.via === 'direct' ? 'speed.src.direct' : m.source === 'server' ? 'speed.src.server'
+      : 'speed.src.proxy', { ago: ago(m.at) });
   }
   tips.ttft = t('tip.ttft');
   tips.hit = t('tip.hit');
@@ -1719,6 +1821,28 @@ function bindValues() {
   v['sum-speed'] = (pre == null && dec == null) ? '—'
     : t(m ? 'speed.live' : 'speed.ref') + ' · ' + num(pre, 0) + ' / ' + num(dec, 1) + ' t/s';
   v['sum-conn'] = t('conn.sum', { n: v.billing });
+
+  const tv = tunnelView(), tb = tv.beat || {};
+  const downFor = tv.down_since ? dur(Date.now() / 1000 - tv.down_since) : '—';
+  v['tun-host'] = hostOf(tv.url);
+  tips['tun-host'] = tv.url || '';
+  v['tun-state'] = tv.state === 'up' ? t('tunnel.up', { ms: num(tv.latency_ms, 0) })
+    : tv.state === 'down' ? t('tunnel.down', { for: downFor, code: codeWord(tv.code) }) : t('tunnel.checking');
+  tips['tun-state'] = t('tip.tunnel.state');
+  v['tun-checked'] = tv.checked_at ? t('tunnel.ago', { ago: ago(tv.checked_at) }) : '—';
+  tips['tun-checked'] = t('tip.link');
+  v['tun-cause'] = tv.state === 'down' && tv.cause ? t('tunnel.cause.' + tv.cause) : '';
+  v['tun-server'] = tb.server_proc == null ? '—' : tb.server_proc && tb.server_health === 200 ? t('tunnel.ok')
+    : t('tunnel.server.bad', { code: tb.server_health ? tb.server_health : t('tunnel.noanswer') });
+  v['tun-proc'] = tb.tunnel_proc == null ? '—' : t(tb.tunnel_proc ? 'tunnel.running' : 'tunnel.stopped');
+  v['tun-public'] = tb.public === 200 ? t('tunnel.up', { ms: num(tb.public_ms, 0) })
+    : tb.tunnel_proc == null ? '—' : codeWord(tb.public);
+  tips['tun-server'] = tips['tun-proc'] = tips['tun-public'] = t('tip.beat');
+  v['tun-beat'] = tv.beat_err ? t('tunnel.beat.err', { err: tv.beat_err })
+    : tv.beat_at ? t('tunnel.beat.at', { ago: ago(tv.beat_at) }) : t('tunnel.beat.none');
+  tips.beat = t('tip.beat');
+  v['sum-tunnel'] = tv.state === 'none' ? '—' : tv.state === 'up' ? t('tunnel.up', { ms: num(tv.latency_ms, 0) })
+    : tv.state === 'down' ? t('tunnel.sum.down', { for: downFor }) : t('tunnel.checking');
   v['sum-log'] = (st.log_tail || []).slice(-1)[0] || '';
 
   // Widths first, before anything below reads layout: a bar that was just drawn
@@ -1757,6 +1881,7 @@ function render() {
   put('s-status', statusHTML());
   put('f-gpus', foldHTML('gpus', 'cpu', t('sec.gpus'), gpusHTML));
   put('f-speed', foldHTML('speed', 'gauge', t('sec.speed'), speedHTML));
+  put('f-tunnel', foldHTML('tunnel', 'link', t('sec.tunnel'), tunnelHTML, tunnelView().state === 'down'));
   put('f-conn', foldHTML('conn', 'plug', t('sec.conn'), connHTML));
   put('f-log', foldHTML('log', 'scroll', t('sec.log'), logHTML));
   bindValues();

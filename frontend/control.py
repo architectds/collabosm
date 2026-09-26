@@ -40,10 +40,11 @@ Why an idle auto-stop, a keep-alive only while in use, and a stop on failure
     service was up 22-25 minutes after their last kernel execution -- one of
     them 40 s after a successful keep-alive ping, so the ping alone is not use
     either. So while the box is in use -- a chat inside that idle window -- it
-    is pinged *and* its kernel runs one trivial statement every 3 minutes
-    (scripts/colab_keepalive.py --touch), and never otherwise: no daemon,
-    nothing that outlives this process, and an idle box is left to the idle
-    stop or to Colab. A job that fails after `assign` is stopped too: `up` stops nothing
+    is pinged every 3 minutes, and every 10 its kernel runs scripts/heartbeat.py
+    (scripts/colab_keepalive.py --heartbeat): one line of the box's health,
+    kept on the VM and here (~/.collabosm/heartbeat.jsonl), and the kernel use
+    Colab counts. Never otherwise: no daemon, nothing that outlives this
+    process, and an idle box is left to the idle stop or to Colab. A job that fails after `assign` is stopped too: `up` stops nothing
     on its way out, and a failed run whose VM keeps billing is worse than no
     run at all.
 
@@ -151,22 +152,32 @@ STALE_GRACE_S = 90 * 60
 
 # coupling cadence: cheap HTTP through the tunnel, the Colab CLI only when that fails
 LINK_EVERY_S = 20            # /health while an endpoint is live
-STATUS_EVERY_S = 60          # /v1/status: launch, activity, the box's VRAM/RAM/disk
+STATUS_EVERY_S = 20          # /v1/status: launch, activity, VRAM/RAM/disk, the last reply's speed
 LINK_FAILS_TO_ASK_VM = 3     # then ask the VM where the service is now
 SESSIONS_EVERY_S = 300       # `colab sessions` while nothing is coupled
 NO_ADOPT_AFTER_STOP_S = 120  # a box we just stopped is not re-adopted while it goes
 BALANCE_EVERY_S = 300        # the account's real CU balance, from Colab
-KEEPALIVE_EVERY_S = 180      # ping + kernel touch while in use; reclaimed at 22-25 min without
+KEEPALIVE_EVERY_S = 180      # the ping while in use: cheap, and it heals the CLI's record
 KEEPALIVE_FIRST_S = 30       # a fresh session's first ping, or a retry until one succeeds
+# The heartbeat is the use Colab counts (scripts/heartbeat.py on the kernel). Boxes went
+# 22-25 min after their last kernel execution, so every 10 min leaves room for a failure,
+# which is retried a minute later.
+HEARTBEAT_EVERY_S = 600
+HEARTBEAT_RETRY_S = 60
+HEARTBEAT_LOG_MAX = 2 * 2 ** 20  # ~/.collabosm/heartbeat.jsonl, then one .1 generation
 # `colab sessions` has been seen to leave out a live box for a few seconds (the CLI then
 # prunes its record: docs/MEASURED.md), so one listing without our box is not proof it
 # is gone. Two, this far apart, are.
 GONE_AFTER_S = 60
 
 NO_ENDPOINT = {"base": None, "key": None, "key_pending": False}
-NO_LINK = {"ok": None, "latency_ms": None, "fails": 0, "checked_at": None}
-NO_HOLD = {"holding": False, "at": None, "ok": None, "err": None,
-           "touched_at": None, "touch_err": None}
+# code: the last /health answer through the tunnel (None: no answer at all; 530 is
+# Cloudflare with no connector, 502 a connector whose server does not answer)
+NO_LINK = {"ok": None, "latency_ms": None, "fails": 0, "checked_at": None,
+           "code": None, "ok_at": None, "down_since": None}
+NO_HOLD = {"holding": False, "at": None, "ok": None, "err": None}
+# at: the last heartbeat that came back; ok/err: the last attempt; data: its line
+NO_BEAT = {"at": None, "ok": None, "err": None, "data": None, "tried_at": None}
 ENDPOINT_ID = re.compile(r"^[A-Za-z0-9-]+$")
 
 SESSION_LINE = re.compile(
@@ -202,6 +213,59 @@ def _root_of(base: str) -> str:
 
 def _is_loopback(url: str) -> bool:
     return (urllib.parse.urlsplit(url).hostname or "") in ("127.0.0.1", "localhost", "::1")
+
+
+def _tunnel_view(st: dict) -> dict:
+    """The rail's tunnel fold: is the public address answering, and when it is not,
+    which part stopped. /health through the tunnel says *that* it stopped; a
+    heartbeat taken since (over Colab's own channel, scripts/heartbeat.py) says
+    *what*. Colab taking the machine back ends the session instead, with its own
+    note, so it is not a cause here.
+
+    state: none | checking | up | down. cause, while down: checking (no heartbeat
+    since the first miss yet) | tunnel_process (cloudflared is not running on the
+    box) | server (the model server is not answering there) | local_path (the
+    address answers the box itself, so the way from here is the problem) |
+    tunnel_edge (cloudflared runs but its address does not answer anyone) |
+    vm_unreachable (the box does not answer over Colab either)."""
+    link, hb = st.get("link") or {}, st.get("heartbeat") or {}
+    base = (st.get("endpoint") or {}).get("base")
+    if st.get("stage") not in ("ready", "attached") or not base:
+        return {"state": "none"}
+    view = {"url": _root_of(base), "latency_ms": link.get("latency_ms"),
+            "checked_at": link.get("checked_at"), "ok_at": link.get("ok_at"),
+            "fails": link.get("fails") or 0, "code": link.get("code"),
+            "down_since": link.get("down_since"), "cause": None,
+            "beat_at": hb.get("at"), "beat_err": hb.get("err") if hb.get("ok") is False else None,
+            "beat": None}
+    d = hb.get("data") or {}
+    if d:
+        sv, tn = d.get("server") or {}, d.get("tunnel") or {}
+        view["beat"] = {"server_proc": sv.get("proc"), "server_health": sv.get("health"),
+                        "tunnel_proc": tn.get("proc"), "public": tn.get("public"),
+                        "public_ms": tn.get("ms")}
+    if link.get("ok") is not False:
+        view["state"] = "up" if link.get("ok") else "checking"
+        return view
+    view["state"] = "down"
+    if st.get("stage") == "attached":
+        return view                       # not our box: nothing to ask over Colab
+    since = link.get("down_since") or 0
+    if d and (hb.get("at") or 0) >= since:
+        sv, tn = d.get("server") or {}, d.get("tunnel") or {}
+        if tn.get("proc") is False:
+            view["cause"] = "tunnel_process"
+        elif sv.get("proc") is False or sv.get("health") != 200:
+            view["cause"] = "server"
+        elif tn.get("public") == 200:
+            view["cause"] = "local_path"
+        else:
+            view["cause"] = "tunnel_edge"
+    elif hb.get("ok") is False and (hb.get("tried_at") or 0) >= since:
+        view["cause"] = "vm_unreachable"
+    else:
+        view["cause"] = "checking"
+    return view
 
 
 def _http_json(url: str, key: str | None = None, timeout: float = 10.0):
@@ -412,6 +476,7 @@ class Control:
                         "ok": None},
             # the keep-alive: held while the box is in use, and when Colab last heard it
             "keepalive": dict(NO_HOLD),
+            "heartbeat": dict(NO_BEAT),
             # the account's real balance and burn rate, from Colab (scripts/colab_ccu.py):
             # it counts every session on the account, which a local ledger cannot
             "balance": None,
@@ -576,6 +641,7 @@ class Control:
         # The VM key is ours to hold, not the browser's: the rail only needs to
         # know that there is one.
         st["endpoint"]["key"] = bool(st["endpoint"].get("key"))
+        st["tunnel"] = _tunnel_view(st)
         st["log_tail"] = list(self.log)[-12:]
         st["colab"] = self.colab.snapshot()
         return st
@@ -760,7 +826,7 @@ class Control:
         """One measured turn from the proxy: the server's timings when it sends
         them, the proxy's own first-token time always."""
         with self.lock:
-            self.state["metrics"] = metrics
+            self.state["metrics"] = dict(metrics, via="app")
 
     def touch(self) -> None:
         """Any chat traffic counts as activity for the idle auto-stop."""
@@ -903,7 +969,8 @@ class Control:
         # still our box (and still billing), not someone else's
         self.state.update(adopted=False, endpoint=dict(NO_ENDPOINT), link=dict(NO_LINK),
                           server=None, machine=None, machine_source=None, vm=None,
-                          idle_policy="frontend", live_model=None, keepalive=dict(NO_HOLD))
+                          idle_policy="frontend", live_model=None, keepalive=dict(NO_HOLD),
+                          heartbeat=dict(NO_BEAT))
 
     def _do_stop(self, reason: str, cu: float) -> None:
         self._run_down()
@@ -1203,8 +1270,8 @@ class Control:
                 live_model=(ids[0] if ids else recipe["model"]), adopted=adopted,
                 vm=None, confirm=None,
                 endpoint={"base": url + "/v1", "key": key, "key_pending": False},
-                link={"ok": True, "latency_ms": round(ms) if ms else None, "fails": 0,
-                      "checked_at": now})
+                link=dict(NO_LINK, ok=True, latency_ms=round(ms) if ms else None,
+                          checked_at=now, code=200, ok_at=now))
             if moved:
                 self.state["note"] = _note("link.moved")
             elif adopted:
@@ -1238,6 +1305,34 @@ class Control:
                 self.state.update(machine=machine, machine_at=now, machine_source="server")
             elif local:
                 self.state.update(machine=local, machine_at=now, machine_source="local")
+            # The speed rail's last reply, whoever sent it: the proxy times only what
+            # passes through it, while Codex, ModelDock or another device may go
+            # straight to the tunnel. The server times every request; its last one
+            # wins when it is newer than what the proxy saw (a reply the proxy did
+            # see is recognised by its token counts, and keeps the proxy's first-token time).
+            lt = (server or {}).get("last_timings") or {}
+            cur = self.state.get("metrics") or {}
+            lt_total = (lt.get("prompt_n") or 0) + (lt.get("cache_n") or 0)
+            seen = (cur.get("via") == "app" and lt.get("at")
+                    and cur.get("predicted_n") == lt.get("predicted_n")
+                    and (cur.get("prompt_n") == lt.get("prompt_n") or cur.get("prompt_total") == lt_total)
+                    and abs(float(cur.get("at") or 0) - float(lt["at"])) < 60)
+            if seen and (cur.get("prefill") is None or cur.get("decode") is None):
+                # a Responses turn through the proxy: its first token timed here, its
+                # rates only the server knows (they are not in that dialect's stream)
+                self.state["metrics"] = dict(cur, source="server",
+                                             prefill=lt.get("prompt_per_second"),
+                                             decode=lt.get("predicted_per_second"),
+                                             cache_n=lt.get("cache_n"), prompt_total=lt_total)
+            elif lt.get("at") and not seen and float(lt["at"]) > float(cur.get("at") or 0) - 2:
+                p_n, c_n = lt.get("prompt_n") or 0, lt.get("cache_n") or 0
+                ms = (lt.get("prompt_ms") or 0) + (lt.get("predicted_ms") or 0)
+                self.state["metrics"] = {
+                    "at": float(lt["at"]), "source": "server", "via": "direct",
+                    "ttft_s": None, "total_s": round(ms / 1000.0, 2) if ms else None,
+                    "prefill": lt.get("prompt_per_second"), "decode": lt.get("predicted_per_second"),
+                    "prompt_n": p_n, "prompt_total": p_n + c_n, "cache_n": c_n,
+                    "predicted_n": lt.get("predicted_n")}
             act = (server or {}).get("activity")
             if act is not None:
                 self.state["idle_policy"] = "server"
@@ -1251,62 +1346,77 @@ class Control:
                 self.state["idle_policy"] = "off" if self.state.get("adopted") else "frontend"
 
     def _link_loop(self) -> None:
-        """While an endpoint is live: /health every 20 s, /v1/status every 60 s.
-        Plain HTTP through the tunnel -- no Colab CLI on this path."""
-        last_status = 0.0
-        keyless = 0
+        """While an endpoint is live: /health and /v1/status every 20 s. Plain HTTP
+        through the tunnel -- no Colab CLI on this path, except the one heartbeat a
+        first miss asks for."""
+        mem = {"last_status": 0.0, "keyless": 0}
         while True:
             time.sleep(LINK_EVERY_S)
-            with self.lock:
-                stage = self.state["stage"]
-                base = self.state["endpoint"].get("base")
-                key = self.state["endpoint"].get("key")
-                busy = self.coupling
-            if stage not in ("ready", "attached") or not base or busy:
-                continue
-            if self.fake and not self.fake_vm:
-                continue                          # the rehearsal host is a placeholder
-            root = _root_of(base)
-            code, _, ms = _http_json(root + "/health", timeout=10)
-            now = time.time()
-            with self.lock:
-                link = self.state["link"]
-                was_down = link.get("ok") is False
-                link["checked_at"] = now
-                if code == 200:
-                    link.update(ok=True, latency_ms=round(ms) if ms else None, fails=0)
-                    if was_down and (self.state.get("note") or {}).get("k") == "link.down":
-                        self.state["note"] = _note("ready")
-                else:
-                    link.update(ok=False, fails=int(link.get("fails") or 0) + 1)
-                fails = link["fails"]
+            self._link_tick(mem)
+
+    def _link_tick(self, mem: dict) -> None:
+        """One check of the tunnel; `mem` carries the loop's memory between ticks."""
+        with self.lock:
+            stage = self.state["stage"]
+            base = self.state["endpoint"].get("base")
+            key = self.state["endpoint"].get("key")
+            busy = self.coupling
+        if stage not in ("ready", "attached") or not base or busy:
+            return
+        if self.fake and not self.fake_vm:
+            return                            # the rehearsal host is a placeholder
+        root = _root_of(base)
+        code, _, ms = _http_json(root + "/health", timeout=10)
+        now = time.time()
+        with self.lock:
+            link = self.state["link"]
+            was_down = link.get("ok") is False
+            link["checked_at"] = now
             if code == 200:
-                if was_down:
-                    self._log("[fe] %s answers again" % root)
-                # healthy but keyless: every chat would get a 401 while the idle clock
-                # and the keep-alive hold the box. Ask the VM for the key again.
-                keyless = keyless + 1 if stage == "ready" and not key and not self.fake else 0
-                if keyless == 1 or (keyless and keyless % 6 == 0):
-                    self._log("[fe] %s answers, but the rail holds no key -- asking the VM" % root)
-                    threading.Thread(target=self.couple, args=("rediscover",), daemon=True).start()
-                if now - last_status >= STATUS_EVERY_S:
-                    last_status = now
-                    scode, server, _ = _http_json(root + "/v1/status", key, timeout=15)
-                    if scode == 200 and isinstance(server, dict):
-                        self._absorb_server(server, root)
-                    elif scode in (404, 405):
-                        self._absorb_server(None, root)   # not ours: local probe if loopback
-                continue
-            # ask the VM after three misses, then once a minute: a restarted serve.sh
-            # is back with a new hostname a few minutes later, and the rail should
-            # follow it without anyone pressing Reconnect
-            if stage == "ready" and (fails == LINK_FAILS_TO_ASK_VM
-                                     or (fails > LINK_FAILS_TO_ASK_VM and fails % 3 == 0)):
-                with self.lock:
-                    self.state["note"] = _note("link.down", stage="?")
-                self._log("[fe] %s stopped answering (%d checks) -- asking the VM where it is"
-                          % (root, fails))
+                link.update(ok=True, latency_ms=round(ms) if ms else None, fails=0,
+                            code=200, ok_at=now, down_since=None)
+                if was_down and (self.state.get("note") or {}).get("k") == "link.down":
+                    self.state["note"] = _note("ready")
+            else:
+                link.update(ok=False, fails=int(link.get("fails") or 0) + 1, code=code,
+                            down_since=link.get("down_since") or now)
+            fails = link["fails"]
+            beat_tried = self.state["heartbeat"].get("tried_at") or 0
+        # The first miss: ask the box itself, over Colab's channel rather than the
+        # tunnel, which part stopped -- the tunnel, the model server, or the machine
+        # (a heartbeat that finds no assignment says the last, and rediscovers).
+        if code != 200 and fails == 1 and stage == "ready" and not self.fake \
+                and now - beat_tried >= HEARTBEAT_RETRY_S:
+            threading.Thread(target=self._keep_alive, kwargs={"heartbeat": True},
+                             daemon=True).start()
+        if code == 200:
+            if was_down:
+                self._log("[fe] %s answers again" % root)
+            # healthy but keyless: every chat would get a 401 while the idle clock
+            # and the keep-alive hold the box. Ask the VM for the key again.
+            keyless = mem["keyless"] = (mem["keyless"] + 1 if stage == "ready" and not key
+                                        and not self.fake else 0)
+            if keyless == 1 or (keyless and keyless % 6 == 0):
+                self._log("[fe] %s answers, but the rail holds no key -- asking the VM" % root)
                 threading.Thread(target=self.couple, args=("rediscover",), daemon=True).start()
+            if now - mem["last_status"] >= STATUS_EVERY_S:
+                mem["last_status"] = now
+                scode, server, _ = _http_json(root + "/v1/status", key, timeout=15)
+                if scode == 200 and isinstance(server, dict):
+                    self._absorb_server(server, root)
+                elif scode in (404, 405):
+                    self._absorb_server(None, root)   # not ours: local probe if loopback
+            return
+        # ask the VM after three misses, then once a minute: a restarted serve.sh
+        # is back with a new hostname a few minutes later, and the rail should
+        # follow it without anyone pressing Reconnect
+        if stage == "ready" and (fails == LINK_FAILS_TO_ASK_VM
+                                 or (fails > LINK_FAILS_TO_ASK_VM and fails % 3 == 0)):
+            with self.lock:
+                self.state["note"] = _note("link.down", stage="?")
+            self._log("[fe] %s stopped answering (%d checks) -- asking the VM where it is"
+                      % (root, fails))
+            threading.Thread(target=self.couple, args=("rediscover",), daemon=True).start()
 
     # ---- log lines -> stages --------------------------------------------- #
 
@@ -1438,9 +1548,10 @@ class Control:
                 self.state["keepalive"]["holding"] = holding
                 hold_every = (KEEPALIVE_EVERY_S if self.state["keepalive"].get("at")
                               else KEEPALIVE_FIRST_S)
+                beat_due = self._beat_due(now, holding)
                 in_charge_h = (now - self.charge_started) / 3600.0 if self.charge_started else 0.0
-                # Heartbeat: if this process dies with a box up, the next one bills
-                # that session up to here plus Colab's idle prune, not up to "now".
+                # The ledger's `seen` mark: if this process dies with a box up, the next
+                # one bills that session up to here plus Colab's idle prune, not to "now".
                 if op and not self.stale and now - op.get("seen", 0) > 60:
                     op["seen"] = now
                     self._save_ledger()
@@ -1452,35 +1563,51 @@ class Control:
                 elif in_charge_h > self.max_session_h:
                     self._log("[fe] in charge for %.1f h -- stopping the VM" % in_charge_h)
                     self.stop("max_hours")
-                elif holding and now - last_hold >= hold_every:
+                elif holding and (now - last_hold >= hold_every or beat_due):
                     last_hold = now
-                    threading.Thread(target=self._keep_alive, daemon=True).start()
+                    threading.Thread(target=self._keep_alive, kwargs={"heartbeat": beat_due},
+                                     daemon=True).start()
             elif stage in ("idle", "stopped", "failed") and not busy \
                     and now - last_probe > SESSIONS_EVERY_S and self._colab_ops():
                 last_probe = now
                 threading.Thread(target=self.couple, args=("probe",), daemon=True).start()
 
-    def _keep_alive(self, ping: bool = True) -> None:
+    def _beat_due(self, now: float, holding: bool) -> bool:
+        """Whether this hold tick carries a heartbeat: every HEARTBEAT_EVERY_S while
+        the box is in use, and a failed one again after HEARTBEAT_RETRY_S. The
+        caller holds the lock."""
+        hb = self.state["heartbeat"]
+        return holding and now - (hb.get("tried_at") or 0) >= HEARTBEAT_RETRY_S and (
+            hb.get("ok") is not True or now - (hb.get("at") or 0) >= HEARTBEAT_EVERY_S)
+
+    def _keep_alive(self, ping: bool = True, heartbeat: bool = False) -> None:
         """Tell Colab the box is in use, and put back the CLI's record of it if the
         CLI dropped it (scripts/colab_keepalive.py). ping=False only does the
         second: coupling needs the record, and is not use.
 
-        Use is the ping *and* a touch -- one trivial statement on the box's kernel.
-        The ping alone did not hold a box: on 2026-09-26 one was reclaimed 40 s after
-        a successful ping, 22 min after its last kernel execution."""
+        heartbeat=True also runs scripts/heartbeat.py on the box's kernel: the use
+        Colab counts -- the ping alone did not hold a box (on 2026-09-26 one was
+        reclaimed 40 s after a successful ping, 22 min after its last kernel
+        execution) -- and one line of the box's health, which is kept here too.
+        It goes over Colab's own channel, so it still answers when the tunnel does
+        not, and says which part stopped."""
+        beat = heartbeat and ping
         with self.lock:
             if self.keepalive_busy:
                 return
             self.keepalive_busy = True
             endpoint = self.known_endpoint
             stage = self.state["stage"]
+            if beat:
+                self.state["heartbeat"]["tried_at"] = time.time()
         try:
             if self.fake:
                 out = "KEEPALIVE ok %s" % (endpoint or "rehearsal-a100-hm-0")
-                if ping:
-                    out += "\nTOUCH ok 5 ms"
+                if beat:
+                    out += "\nHEARTBEAT " + json.dumps(self._fake_beat())
             else:
-                args = (["--touch"] if ping else ["--no-ping"]) + [self.session]
+                args = (([] if ping else ["--no-ping"]) + (["--heartbeat"] if beat else [])
+                        + [self.session])
                 if endpoint and ENDPOINT_ID.match(endpoint):
                     args.append(endpoint)
                 # with the CLI's own interpreter, wherever the Colab guide found it
@@ -1489,24 +1616,37 @@ class Control:
             m = re.search(r"^KEEPALIVE( ok|_GONE|_ERROR)\b[ \t]*(.*)$", out, re.M)
             kind = m.group(1).strip() if m else "_ERROR"
             rest = (m.group(2) if m else (out.strip().splitlines() or ["no answer"])[-1]).strip()
-            # `TOUCH ok <ms> ms` | `TOUCH_ERROR <why>`, after an ok when asked to touch
-            t = re.search(r"^TOUCH( ok|_ERROR)\b[ \t]*(.*)$", out, re.M) if ping else None
-            touch_err = None
-            if ping and kind == "ok":
-                touch_err = ("no answer" if t is None
-                             else None if t.group(1) == " ok" else (t.group(2).strip() or "?")[:160])
+            # `HEARTBEAT <json>` | `HEARTBEAT_ERROR <why>`, after an ok when one was asked for
+            data, beat_err = None, None
+            if beat and kind == "ok":
+                h = re.search(r"^HEARTBEAT(_ERROR)?[ \t]+(.*)$", out, re.M)
+                if h is None:
+                    beat_err = "no answer"
+                elif h.group(1):
+                    beat_err = (h.group(2).strip() or "?")[:160]
+                else:
+                    try:
+                        data = json.loads(h.group(2))
+                    except ValueError:
+                        data = None
+                    if not isinstance(data, dict):
+                        data, beat_err = None, "an unreadable heartbeat"
             now = time.time()
             with self.lock:
                 # a box that stopped while the call was out gets no hold painted on it
                 current = self.state["stage"] == stage
                 hold = self.state["keepalive"]
                 before = (hold.get("ok"), hold.get("err"))
-                touch_before = hold.get("touch_err")
+                hb = self.state["heartbeat"]
+                beat_before = hb.get("err")
                 if kind == "ok":
                     if ping and current:
-                        hold.update(ok=True, err=None, at=now, touch_err=touch_err)
-                        if touch_err is None:
-                            hold["touched_at"] = now
+                        hold.update(ok=True, err=None, at=now)
+                    if beat and current:
+                        if data is not None:
+                            hb.update(at=now, ok=True, err=None, data=data)
+                        else:
+                            hb.update(ok=False, err=beat_err)
                 elif current:
                     hold.update(ok=False, err="gone" if kind == "_GONE" else rest[:160])
                 after = (hold.get("ok"), hold.get("err"))
@@ -1523,14 +1663,43 @@ class Control:
                 self._log("!! keep-alive failed: %s" % rest[:160])
             elif kind == "ok" and ping and current and before[0] is not True:
                 self._log("[fe] keep-alive: Colab holds %s while it is in use" % self.session)
-            if kind == "ok" and ping and current and touch_err != touch_before:
-                # said once per change: a kernel that stops answering is the box
-                # Colab will reclaim in ~20 min, whatever the ping says
-                self._log("!! kernel touch failed: %s -- Colab may reclaim the box" % touch_err
-                          if touch_err else "[fe] kernel touch answers again")
+            if beat and kind == "ok" and current:
+                self._keep_beat(now, data, beat_err)
+                if beat_err != beat_before:
+                    # said once per change: a kernel that stops answering is the box
+                    # Colab reclaims in ~20 min, whatever the ping says
+                    self._log("!! heartbeat failed: %s -- Colab may reclaim the box" % beat_err
+                              if beat_err else "[fe] heartbeat answers again")
         finally:
             with self.lock:
                 self.keepalive_busy = False
+
+    def _keep_beat(self, now: float, data, err) -> None:
+        """Every heartbeat, and every failed one, onto ~/.collabosm/heartbeat.jsonl: a
+        reclaimed VM takes its own copy with it, and the next post-mortem starts here."""
+        if not self.persist_ledger or self.fake:
+            return
+        path = os.path.join(self.state_dir, "heartbeat.jsonl")
+        row = {"recv": round(now, 1), "session": self.session,
+               "endpoint": self.known_endpoint, "ok": data is not None}
+        row.update(data if data is not None else {"error": err})
+        try:
+            os.makedirs(self.state_dir, exist_ok=True)
+            if os.path.exists(path) and os.path.getsize(path) > HEARTBEAT_LOG_MAX:
+                os.replace(path, path + ".1")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+        except OSError as exc:
+            self._log("!! could not keep the heartbeat: %r" % exc)
+
+    def _fake_beat(self) -> dict:
+        """What the rehearsal's box says: an A100 at rest, everything answering."""
+        return {"at": int(time.time()), "uptime_s": 600,
+                "gpu": {"util_pct": 0.0, "mem_used_mib": 74000.0, "mem_total_mib": 81920.0,
+                        "temp_c": 34.0, "power_w": 60.0},
+                "ram": {"used_gib": 93.0, "total_gib": 167.1}, "disk_free_gib": 86.0,
+                "server": {"proc": True, "health": 200, "ms": 2, "requests": 0, "in_flight": 0},
+                "tunnel": {"proc": True, "url": None, "public": 200, "ms": 180}, "took_ms": 900}
 
     def _probe_balance(self) -> None:
         """The account's real compute-unit balance and burn rate, from Colab itself."""

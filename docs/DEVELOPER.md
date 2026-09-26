@@ -116,7 +116,8 @@ short prompts, the card warns). Quality past 262K is not measured yet.
 | `recipes.json` | **the recipe registry**: cards, models, and the launch settings for each pair, every number marked measured or not |
 | `scripts/recipe.py` | resolves a recipe id into the environment `up` launches with (`list`, `show`, `env`, `vmenv`, `check`) |
 | `scripts/restore.py` | **the session restore script.** Re-attaches an orphaned VM from server truth, or creates one and actually requests the recipe's shape. Refuses/stops a box below the recipe's VRAM before spending anything. |
-| `scripts/colab_keepalive.py` | tells Colab the box is in use (the frontend calls it only while it is): the keep-alive ping plus, with `--touch`, one trivial statement on the kernel -- the ping alone did not hold a box. Also refreshes the CLI's session record from the live assignment, and re-registers it when the CLI drops it |
+| `scripts/colab_keepalive.py` | tells Colab the box is in use (the frontend calls it only while it is): the keep-alive ping, and with `--heartbeat` scripts/heartbeat.py on the kernel -- kernel use is what holds a box; the ping alone did not. Also refreshes the CLI's session record from the live assignment, and re-registers it when the CLI drops it |
+| `scripts/heartbeat.py` | runs on the VM, in the kernel, every 10 min while the box is in use and once on the tunnel's first miss: one JSON line of GPU/RAM/disk, the model server (process, /health, activity) and the tunnel (cloudflared running, the public address from the box itself), appended to /content/heartbeat.jsonl and kept on the laptop in ~/.collabosm/heartbeat.jsonl |
 | `scripts/colab_ccu.py` | the account's real CU balance and burn rate, read from Colab |
 | `scripts/colab_auth.py` | the CLI's own sign-in, for the frontend: `status`, `login` (loopback redirect), `logout` (revoke) |
 | `scripts/probe_gpu.py` | runs on the VM; reports VRAM/RAM/cc/disk as one JSON line |
@@ -429,8 +430,36 @@ Both dialects stream through it line by line -- `/v1/responses` and `/v1/chat/co
 - the bearer key stays in this process and is never handed to a browser -- until someone presses
   the rail's key button (to reach the GPU from another device): `POST /control/key` fetches it on
   that click, same-origin JSON only, and `/control/status`, polled every 1.5 s, never carries it,
-- the tunnel's hostname changes with every VM, and this address does not,
+- the tunnel's hostname changes with every VM, and this address does not -- which is why local
+  clients (Codex, ModelDock, Open WebUI, scripts) should be pointed here rather than at the
+  tunnel: a new box needs no client edits, and a dead tunnel reads as the proxy's own 503 instead
+  of Cloudflare's 530 page,
 - the page is same-origin with the proxy, so there is no CORS surface at all.
+
+**What the rail sees of traffic.** The proxy times what passes through it, in both dialects
+(`Meter`: the first token of a chat chunk or of a Responses delta, the token counts from either
+usage shape). The server times every request, whoever sent it, and `/v1/status` -- polled every
+20 s -- carries the last one as `last_timings`. The speed rail takes the newer of the two: a reply
+the proxy also saw keeps the proxy's first-token time and gains the server's rates (a Responses
+stream carries none), and a reply it never saw -- a client on the tunnel directly -- is shown as
+such (`metrics.via`: `app` or `direct`).
+
+**The tunnel fold.** `/health` through the tunnel every 20 s says *whether* the address answers
+(`link`: code, `down_since`, `ok_at`). On the first miss the frontend also runs a heartbeat
+(`scripts/heartbeat.py` over Colab's own channel, not the tunnel), and `_tunnel_view` turns what it
+finds into a verdict: `tunnel_process` (cloudflared is not running on the box), `server` (the model
+server is not answering there), `local_path` (the address answers the box itself, so the way from
+here is the problem), `tunnel_edge` (cloudflared runs, but its address answers nobody), or
+`vm_unreachable` (the box does not answer over Colab either -- the keep-alive then finds out
+whether Colab took it back, and the session ends with its own note).
+
+**ModelDock through the proxy.** Tested with ModelDock's own request shapes (its Add probes and a
+streaming Responses turn with the freeform `apply_patch` tool, a placeholder key): all pass, and the
+proxy replaces the placeholder with the box's key. Note that ModelDock treats a loopback address as
+a local engine (`isLocalBackend`): it compacts without calling the model, trims its instructions
+and appends two rules for local hosts, and projects history lightly. Its catalog keeps `apply_patch`
+freeform either way. Its dashboard cannot edit an endpoint's address (remove and add again), and
+its Add probes need a running box.
 
 There is deliberately **no** `Access-Control-Allow-Origin: *` here: a wildcard on a proxy that
 injects a bearer key would let any web page you happen to visit read what your GPU says. That alone

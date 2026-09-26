@@ -157,8 +157,11 @@ api_server.py on 127.0.0.1:8090  ->  cloudflared --url http://127.0.0.1:8090
   either: the same day a box pinged every 3 minutes was reclaimed 22 minutes after its last `colab
   exec`, 40 s after a ping that succeeded. What Colab counts is the notebook kernel. The frontend
   therefore, every 3 minutes **while the box is in use** (a chat inside the idle-stop window) and
-  never otherwise, pings *and* runs one trivial statement on the kernel (`scripts/colab_keepalive.py
-  --touch`, one `wsl.exe` call per tick; a failed touch is written to the log). An idle box is left
+  never otherwise, pings, and every 10 minutes runs scripts/heartbeat.py on the kernel
+  (`scripts/colab_keepalive.py --heartbeat`, one `wsl.exe` call per tick; a failed heartbeat is
+  written to the log and retried a minute later). The heartbeat is one line of the box's health,
+  appended to /content/heartbeat.jsonl on the VM and to ~/.collabosm/heartbeat.jsonl here -- the
+  copy that survives when Colab takes the VM, and its disk, back. An idle box is left
   to the idle stop, or to Colab.
 - No daemon, on purpose: a keep-alive that outlives the frontend is what turns a 2 h session into a
   24 h one. (The CLI's own daemon from `colab new` lives in WSL anyway, and WSL shuts its VM down
