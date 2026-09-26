@@ -4,14 +4,17 @@
 > real -- keep this as the record of what that lane costs. The shipped frontend is now `frontend/`:
 > our shell around an unmodified llama.cpp Web UI ([frontend/UPSTREAM.md](../frontend/UPSTREAM.md)).
 > Use that unless you specifically want Open WebUI's multi-user/RAG features.
+> (2026-09-26: the local client proxy this pointed at, `collabosm.py` on 8790, is gone -- the
+> frontend's `/v1` on 3020 does the same job, key injection included, and the addresses below say so.)
 
 # Open WebUI against collabosm, measured
 
 The division of labour is deliberate: **Open WebUI owns chat, this repo owns the adapter and the
 dashboard.** Open WebUI already has multi-conversation, folders, search and a model picker; the
 things that are genuinely missing -- wire-level prefill/decode, vision availability, the image
-policy, which launch parameters the server is actually running -- are on `/status` and nowhere
-else. So do not rebuild chat. Point Open WebUI at the proxy and keep the status page beside it.
+policy, which launch parameters the server is actually running -- are in the frontend's column and
+nowhere else. So do not rebuild chat. Point Open WebUI at the frontend's `/v1` and keep the frontend
+open beside it.
 
 ## Install (E: drive, no C: growth)
 
@@ -34,13 +37,13 @@ dependency set.
 ## Run
 
 `E:\open-webui\start-mock.ps1` starts it against the local mock. For a real endpoint change
-`OPENAI_API_BASE_URL` to the proxy (`http://127.0.0.1:8790/v1`), never to the tunnel: the proxy
-holds the bearer key, and the UI is same-origin with the status page.
+`OPENAI_API_BASE_URL` to the frontend (`http://127.0.0.1:3020/v1`, with `python frontend/server.py`
+running), never to the tunnel: the frontend holds the bearer key, and its address outlives every VM.
 
 ```powershell
 $env:DATA_DIR            = 'E:\open-webui\data'      # sqlite, uploads, cache -- stays on E:
-$env:OPENAI_API_BASE_URL = 'http://127.0.0.1:8790/v1'
-$env:OPENAI_API_KEY      = 'sk-anything'             # the proxy injects the real key
+$env:OPENAI_API_BASE_URL = 'http://127.0.0.1:3020/v1'
+$env:OPENAI_API_KEY      = 'sk-anything'             # the frontend injects the real key
 $env:WEBUI_SECRET_KEY    = '<per-install random>'
 $env:OFFLINE_MODE        = 'True'                    # no HF model pulls behind your back
 $env:WEBUI_NAME          = 'collabosm'
@@ -56,7 +59,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/v1/auths/signup `
   -Body (@{ name='collabosm'; email='you@local.test'; password='<pw>' } | ConvertTo-Json)
 ```
 
-Then: Admin Settings -> Connections -> OpenAI -> base URL `http://127.0.0.1:8790/v1`, any key.
+Then: Admin Settings -> Connections -> OpenAI -> base URL `http://127.0.0.1:3020/v1`, any key.
 The model appears as `qwen3.8-flash-next-exl3`.
 
 ## What was actually verified

@@ -9,15 +9,22 @@ The shell asks five questions and nothing else:
     stop(reason)                 stop paying for a card
     couple()                     find the service that is running, and attach to it
 
-Everything expensive lives behind that seam: the WSL bridge to the Colab CLI,
+Everything expensive lives behind that seam: the Colab CLI (native or in WSL),
 the CU ledger, the confirmation gate, the idle auto-stop, and the endpoint the
 chat page is proxied to once the box is up.
 
-Why WSL
-    google-colab-cli is Linux-only (`uv tool install` has no Windows build), so
-    the Windows frontend cannot import it. It shells out instead: every Colab
-    action is `wsl.exe -d <distro> -- bash -lc ...`, which is also how
-    scripts/up.sh, restore.py and down.sh are already driven by hand.
+The Colab guide
+    A new user has no Colab CLI and no sign-in, so the rail opens with a guide
+    (frontend/colab_setup.py): install google-colab-cli, sign in with Google once
+    (the CLI's own OAuth client, through a loopback redirect), then the balance.
+    Nothing that needs Colab runs before that, and Start is refused until it is done.
+
+Where it runs
+    Everything that talks to Colab is Python, run with the CLI's own interpreter
+    wherever the guide found it: natively -- Windows, macOS, Linux -- or inside WSL.
+    scripts/provision.py does up / down / fetch / sessions through the CLI itself
+    (scripts/colab_cmd.py: the `colab` command minus the Unix-only console that
+    kills it on Windows), so no step needs bash, WSL, or GNU coreutils.
 
 Why the confirmation gate
     Selecting a recipe is the moment billing starts. A bare click therefore
@@ -35,19 +42,19 @@ Why an idle auto-stop, a keep-alive only while in use, and a stop on failure
     inside that idle window -- it is kept alive every 3 minutes
     (scripts/colab_keepalive.py), and never otherwise: no daemon, nothing that
     outlives this process, and an idle box is left to the idle stop or to
-    Colab. A job that fails after `assign` is stopped too: up.sh stops nothing
+    Colab. A job that fails after `assign` is stopped too: `up` stops nothing
     on its way out, and a failed run whose VM keeps billing is worse than no
     run at all.
 
 Coupling to a service that is already running
-    A box can be up without this process having started it -- up.sh by hand, a
+    A box can be up without this process having started it -- `up` by hand, a
     frontend restart, another tool. couple() finds it: `colab sessions` says
     whether our session is live, and the VM's own files say where the service
     is and what its key is. Those files come through `colab download` (the
     contents API), never `colab exec`: exec goes through the kernel and was
     seen to hang for minutes. Everything after that is HTTP through the tunnel
     -- /health every 20 s, /v1/status every 60 s (launch parameters, activity,
-    and the box's VRAM/RAM/disk) -- so a coupled rail needs no WSL on its hot
+    and the box's VRAM/RAM/disk) -- so a coupled rail needs no Colab CLI on its hot
     path. When the tunnel stops answering the VM is asked again (a restarted
     serve.sh means a new quick-tunnel hostname), and when the session is gone
     its billing is closed.
@@ -59,7 +66,7 @@ Coupling to a service that is already running
     stop at all. Stopping a box someone is using is worse than showing its cost.
 
 Adopt, never duplicate
-    Provisioning goes through scripts/up.sh -> scripts/restore.py, which
+    Provisioning goes through scripts/provision.py -> scripts/restore.py, which
     re-attaches to an existing assignment rather than creating a second one
     (that is what restore.py exists for: a pruned local session record once cost
     a duplicate VM).
@@ -68,10 +75,10 @@ Words are the shell's job
     The rail is drawn in English, Chinese or Japanese, so nothing here writes a
     sentence for it: `note` and `foot` are {"k": key, "a": args} and answers
     carry a `code`. shell.html owns every string in all three languages. Log
-    lines stay raw -- they are what up.sh printed.
+    lines stay raw -- they are what provision.py printed.
 
 Rehearsal
-    `fake=True` swaps the WSL command for frontend/fake_provision.py, which
+    `fake=True` swaps provision.py for frontend/fake_provision.py, which
     emits the same log lines in ~24 s. That is how this file is exercised
     without a card: server.py --fake-provision, or --mock with a ledger that is
     never written. COLLABOSM_FAKE_VM_URL=<a local endpoint> makes the rehearsal
@@ -84,7 +91,6 @@ import ctypes
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -100,11 +106,13 @@ import urllib.request
 
 # The registry (recipes.json, read through scripts/recipe.py) is the one list of
 # what can run where: the rail offers exactly its entries, and a pick sends only the
-# recipe id to up.sh, which resolves everything else from the same file. Each
+# recipe id to provision.py, which resolves everything else from the same file. Each
 # number carries {v, measured, src}, so the rail can tell a measurement from an
 # estimate without a word of it living here.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "scripts"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import recipe as registry  # noqa: E402
+from colab_setup import ColabSetup  # noqa: E402
 
 REGISTRY = registry.load()
 RECIPES = registry.flat(REGISTRY)
@@ -140,7 +148,7 @@ STAGE_ORDER = ["idle", "requesting", "uploading", "bootstrapping", "loading", "r
 # understate it (docs/RUNBOOK.md).
 STALE_GRACE_S = 90 * 60
 
-# coupling cadence: cheap HTTP through the tunnel, WSL only when that fails
+# coupling cadence: cheap HTTP through the tunnel, the Colab CLI only when that fails
 LINK_EVERY_S = 20            # /health while an endpoint is live
 STATUS_EVERY_S = 60          # /v1/status: launch, activity, the box's VRAM/RAM/disk
 LINK_FAILS_TO_ASK_VM = 3     # then ask the VM where the service is now
@@ -212,6 +220,12 @@ def _http_json(url: str, key: str | None = None, timeout: float = 10.0):
         return e.code, None, (time.time() - t0) * 1000.0
     except Exception:
         return 0, None, None
+
+
+def _needs_sign_in(out: str) -> bool:
+    """The Colab CLI stopped to ask for a sign-in (no token, or a dead one): with no
+    terminal to answer it, the command failed -- and the Colab guide should know."""
+    return "To authorize colab-cli" in out or "Enter the authorization code" in out
 
 
 def _parse_sessions(out: str) -> list:
@@ -292,7 +306,7 @@ class Control:
                  max_session_h: float = 6.0, fake: bool = False,
                  state_dir: str | None = None, persist_ledger: bool = True,
                  external: str | None = None, external_key: str | None = None,
-                 external_model: str | None = None):
+                 external_model: str | None = None, fake_colab: str | None = None):
         self.root = os.path.abspath(root)
         self.session = session
         self.distro = distro
@@ -328,6 +342,13 @@ class Control:
         self.last_activity = time.time()
         self.stop_wanted = False
         self.log = collections.deque(maxlen=40)
+        # The Colab CLI -- is it here, is it signed in, as whom: the rail's Colab guide.
+        # Its commands go through _wsl_run (late-bound: a test that swaps _wsl_run for
+        # canned answers swaps these too). A rehearsal plays the guide from `fake_colab`.
+        self.colab = ColabSetup(self.root, distro=distro,
+                                fake=(fake_colab or "connected") if fake else None,
+                                runner=lambda argv, timeout: self._wsl_run(argv, timeout),
+                                log=self._log, on_connected=self._after_connect)
         self.started_here = False       # this process ran the job that holds the box
         self.charge_started = 0.0       # when this process took charge: job or adoption
         self.coupling = False
@@ -341,7 +362,7 @@ class Control:
         self.keepalive_busy = False
         self.sessions_failed = False
         self.absent_since = None        # first listing without our box, since the last with it
-        self.downing = False            # down.sh is running: nothing new may start meanwhile
+        self.downing = False            # `down` is running: nothing new may start meanwhile
         # Bumped by every stop, job start and let-go: a coupling that began before one
         # of those must not write its (now stale) findings over what happened since.
         self.epoch = 0
@@ -392,7 +413,7 @@ class Control:
             # the account's real balance and burn rate, from Colab (scripts/colab_ccu.py):
             # it counts every session on the account, which a local ledger cannot
             "balance": None,
-            "cli": {"wsl": distro, "colab": "unknown", "root": _wsl_path(self.root),
+            "cli": {"wsl": distro, "colab": "unknown", "where": None, "root": _wsl_path(self.root),
                     "command": None, "checked_at": None},
             "confirm": None,
             "fake": fake,
@@ -554,12 +575,15 @@ class Control:
         # know that there is one.
         st["endpoint"]["key"] = bool(st["endpoint"].get("key"))
         st["log_tail"] = list(self.log)[-12:]
+        st["colab"] = self.colab.snapshot()
         return st
 
     def select(self, recipe_id: str, confirm: bool = False) -> dict:
         recipe = next((r for r in RECIPES if r["id"] == recipe_id), None)
         if recipe is None:
             return {"ok": False, "code": "unknown_recipe"}
+        # judged on an answer: a Start pressed while the first look is still out waits
+        colab = self.colab.settled(15)
         with self.lock:
             stage = self.state["stage"]
             if stage == "attached":
@@ -579,6 +603,9 @@ class Control:
                 return {"ok": False, "code": "stale_ledger"}
             if not recipe["runnable"]:
                 return {"ok": False, "code": "placeholder", "recipe": recipe["id"]}
+            if colab["stage"] != "connected":
+                # no CLI, or no sign-in: `up` would fail at its first Colab call
+                return {"ok": False, "code": "colab_setup", "stage": colab["stage"]}
             bal = self.state.get("balance") or {}
             left = bal["cu"] if bal.get("cu") is not None else self.state["cu_left"]
             need = round(recipe["cu_per_hour"] * ((recipe["eta_min"] + 5) / 60.0), 2)
@@ -632,7 +659,7 @@ class Control:
             ours_live = any(s.get("ours") for s in self.state["billing"].get("sessions") or [])
             if stage in ("idle", "stopped") and not (open_entry or ours_live):
                 return {"ok": True, "code": "nothing_to_stop"}
-            # `failed` gets here on purpose: _fail() already ran down.sh, and this
+            # `failed` gets here on purpose: _fail() already ran `down`, and this
             # is the manual retry for when the billing probe still shows a VM.
             running_job = stage in ("requesting", "uploading", "bootstrapping", "loading")
             if self.stale and open_entry and stage in ("idle", "stopped"):
@@ -657,12 +684,15 @@ class Control:
         Also the rediscovery path: a ready rail whose tunnel stopped answering
         calls this to learn the new address (or that the VM is gone).
         """
+        colab = None if self.fake else self.colab.settled(15)
         with self.lock:
             if self.coupling:
                 return {"ok": True, "code": "coupling"}
             stage = self.state["stage"]
             if stage == "attached":
                 return {"ok": False, "code": "attached", "base": self.external}
+            if colab is not None and colab["stage"] != "connected":
+                return {"ok": False, "code": "colab_setup", "stage": colab["stage"]}
             if stage in ("requesting", "uploading", "bootstrapping", "stopping"):
                 return {"ok": False, "code": "busy", "stage": stage}
             if stage == "loading" and why != "after_ready":
@@ -745,15 +775,13 @@ class Control:
         threading.Thread(target=self._beat, daemon=True).start()
         threading.Thread(target=self._run, args=(recipe,), daemon=True).start()
 
-    def _wsl_command(self, recipe: dict) -> list:
-        # only the id: up.sh resolves the card, the model and every flag from the
-        # same recipes.json, so the rail and a hand-run up.sh cannot disagree
-        exports = {"SESSION": self.session, "COLAB": "$HOME/.local/bin/colab",
-                   "RECIPE": recipe["id"]}
-        env_str = " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in exports.items())
-        inner = ("cd %s && export %s && exec bash scripts/up.sh"
-                 % (shlex.quote(_wsl_path(self.root)), env_str))
-        return ["wsl.exe", "-d", self.distro, "--", "bash", "-lc", inner]
+    def _up_argv(self, recipe: dict) -> list:
+        # only the id: provision.py resolves the card, the model and every flag from
+        # the same recipes.json, so the rail and a hand-run `up` cannot disagree. It
+        # runs with the Colab CLI's interpreter, wherever the guide found it (natively,
+        # or inside WSL): arguments, not environment, because nothing crosses into WSL
+        return self.colab.script_argv("provision.py", ["up", "--session", self.session,
+                                                       "--recipe", recipe["id"]])
 
     def _spawn(self, recipe: dict):
         if self.fake:
@@ -761,9 +789,11 @@ class Control:
             return subprocess.Popen(argv, cwd=self.root, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                     errors="replace", bufsize=1)
-        argv = self._wsl_command(recipe)
+        argv = self._up_argv(recipe)
         env = dict(os.environ)
         env["WSL_UTF8"] = "1"        # wsl.exe otherwise prints UTF-16 for its own messages
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUNBUFFERED"] = "1"   # every stage line as it happens, not at the end
         kwargs = {}
         if os.name == "nt":
             kwargs["creationflags"] = 0x08000000      # CREATE_NO_WINDOW
@@ -801,14 +831,16 @@ class Control:
             self._after_ready(recipe)
             return
         if rc == 0:
-            self._fail(_note("fail.noready"), "up.sh exited 0 without READY")
+            self._fail(_note("fail.noready"), "up exited 0 without READY")
             return
-        # 2-5 never got a box and restore.py already stopped a 40 GB one (6); down.sh
+        if rc == 5:
+            self.colab.check()       # "cannot read assignments": most often a dead sign-in
+        # 2-5 never got a box and restore.py already stopped a 40 GB one (6); `down`
         # is harmless for those and settles the question for all the rest.
-        self._fail(_note("fail.exit", rc=rc), "up.sh exited %s" % rc)
+        self._fail(_note("fail.exit", rc=rc), "up exited %s" % rc)
 
     def _after_ready(self, recipe: dict) -> None:
-        """Couple to what up.sh just brought up: the key and the published URL come
+        """Couple to what `up` just brought up: the key and the published URL come
         from the VM's files, the rest over the tunnel -- the same path as adoption."""
         if self.fake and not self.fake_vm:
             with self.lock:
@@ -830,17 +862,19 @@ class Control:
             out = "[down] rehearsal: no VM was ever created"
             self.fake_vm_down = True
         else:
-            # our session by name -- down.sh's default is "collabosm", and a stop that
-            # names the wrong session "works" while ours keeps billing -- and our
-            # endpoint, so down.sh can put back a record the CLI dropped before it stops
+            # our session by name -- the default is "collabosm", and a stop that names
+            # the wrong session "works" while ours keeps billing -- and our endpoint, so
+            # a record the CLI dropped is put back before the stop
             ep = self.known_endpoint
-            extra = "SESSION=%s " % shlex.quote(self.session)
+            args = ["down", "--session", self.session]
             if ep and ENDPOINT_ID.match(ep):
-                extra += "ENDPOINT=%s " % ep
-            argv = ["wsl.exe", "-d", self.distro, "--", "bash", "-lc",
-                    "cd %s && %sCOLAB=$HOME/.local/bin/colab bash scripts/down.sh"
-                    % (shlex.quote(_wsl_path(self.root)), extra)]
-            out = self._wsl_run(argv, timeout=300)
+                args += ["--endpoint", ep]
+            out = self._wsl_run(self.colab.script_argv("provision.py", args), timeout=300)
+            if _needs_sign_in(out):
+                # the one failure a retry cannot fix by itself: the VM may still bill
+                self._log("!! the stop could not sign in to Colab -- connect again in the Colab "
+                          "section, then press Stop again (until then the VM may still bill)")
+                self.colab.check()
         for line in out.splitlines()[-6:]:
             self._log(line)
 
@@ -878,7 +912,7 @@ class Control:
         self._refresh_money()
         if not vm_possible:
             return
-        # up.sh stops nothing on its way out, so a failure after `assign` leaves a
+        # `up` stops nothing on its way out, so a failure after `assign` leaves a
         # VM billing behind a ledger entry that says it closed -- and the rail used
         # to refuse to stop a failed job at all.
         self._run_down_marked()
@@ -905,7 +939,7 @@ class Control:
         threading.Thread(target=self._run_down_marked, daemon=True).start()
 
     def _run_down_marked(self) -> None:
-        """down.sh, with new starts refused while it runs: restore.py could re-attach
+        """`down`, with new starts refused while it runs: restore.py could re-attach
         to the very box this is stopping, and the stop would then kill the new job."""
         with self.lock:
             self.downing = True
@@ -919,6 +953,7 @@ class Control:
         try:
             env = dict(os.environ)
             env["WSL_UTF8"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"   # the Colab CLI's own python, run natively
             kwargs = {"creationflags": 0x08000000} if os.name == "nt" else {}
             res = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
                                  errors="replace", timeout=timeout, env=env, **kwargs)
@@ -932,13 +967,10 @@ class Control:
         """One small file from the VM through the contents API -> its text, or None.
 
         Never `colab exec`: that goes through the kernel and was seen to hang for
-        minutes. The work is in scripts/vm_fetch.sh, not an inline script: wsl.exe
-        runs what follows `--` through the default shell first, so an inline
-        script's variables were expanded, empty, before bash ever set them.
+        minutes. `provision.py fetch` uses the contents API (`colab download`).
         """
-        fetch = _wsl_path(self.root) + "/scripts/vm_fetch.sh"
-        out = self._wsl_run(["wsl.exe", "-d", self.distro, "--", "bash", "-l", fetch,
-                             self.session, remote, str(int(timeout) - 10)], timeout=timeout)
+        out = self._wsl_run(self.colab.script_argv(
+            "provision.py", ["fetch", self.session, remote, str(int(timeout) - 10)]), timeout=timeout)
         m = re.search(r"__BEGIN__\n(.*?)\n?__END__", out, re.S)
         return m.group(1).strip() if m else None
 
@@ -1065,7 +1097,7 @@ class Control:
     def _couple(self, why: str, token=None) -> dict:
         sessions = self._probe_sessions()
         if sessions is None:
-            # `colab sessions` itself failed (WSL, auth, network): that says nothing
+            # `colab sessions` itself failed (the CLI, auth, network): that says nothing
             # about the VM, and a box that is serving must not be written off on it
             return {"ok": False, "code": "probe_failed"}
         ours = next((s for s in sessions if s.get("ours")), None)
@@ -1205,7 +1237,7 @@ class Control:
 
     def _link_loop(self) -> None:
         """While an endpoint is live: /health every 20 s, /v1/status every 60 s.
-        Plain HTTP through the tunnel -- no WSL on this path."""
+        Plain HTTP through the tunnel -- no Colab CLI on this path."""
         last_status = 0.0
         keyless = 0
         while True:
@@ -1351,7 +1383,7 @@ class Control:
     # ---- background loops ------------------------------------------------- #
 
     def _beat(self) -> None:
-        """Time-based floor for the bar: up.sh sleeps 45 s between status lines."""
+        """Time-based floor for the bar: `up` sleeps 45 s between status lines."""
         while True:
             time.sleep(2.0)
             with self.lock:
@@ -1379,7 +1411,8 @@ class Control:
             now = time.time()
             if now - last_balance > BALANCE_EVERY_S:
                 last_balance = now
-                self._balance_soon()
+                if self.colab.ready():
+                    self._balance_soon()
             with self.lock:
                 stage = self.state["stage"]
                 op = self.ledger.get("open")
@@ -1408,7 +1441,7 @@ class Control:
                     last_hold = now
                     threading.Thread(target=self._keep_alive, daemon=True).start()
             elif stage in ("idle", "stopped", "failed") and not busy \
-                    and now - last_probe > SESSIONS_EVERY_S:
+                    and now - last_probe > SESSIONS_EVERY_S and self._colab_ops():
                 last_probe = now
                 threading.Thread(target=self.couple, args=("probe",), daemon=True).start()
 
@@ -1429,11 +1462,8 @@ class Control:
                 args = ([] if ping else ["--no-ping"]) + [self.session]
                 if endpoint and ENDPOINT_ID.match(endpoint):
                     args.append(endpoint)
-                out = self._wsl_run(["wsl.exe", "-d", self.distro, "--", "bash", "-lc",
-                                     "$HOME/.local/share/uv/tools/google-colab-cli/bin/python "
-                                     "%s/scripts/colab_keepalive.py %s"
-                                     % (_wsl_path(self.root),
-                                        " ".join(shlex.quote(a) for a in args))], timeout=90)
+                # with the CLI's own interpreter, wherever the Colab guide found it
+                out = self.colab.run_script("colab_keepalive.py", args, timeout=90)
             # `KEEPALIVE ok <endpoint>[ reattached]` | `KEEPALIVE_GONE` | `KEEPALIVE_ERROR <why>`
             m = re.search(r"^KEEPALIVE( ok|_GONE|_ERROR)\b[ \t]*(.*)$", out, re.M)
             kind = m.group(1).strip() if m else "_ERROR"
@@ -1469,11 +1499,9 @@ class Control:
 
     def _probe_balance(self) -> None:
         """The account's real compute-unit balance and burn rate, from Colab itself."""
-        if self.fake:
+        if self.fake or not self.colab.ready():
             return
-        out = self._wsl_run(["wsl.exe", "-d", self.distro, "--", "bash", "-lc",
-                             "$HOME/.local/share/uv/tools/google-colab-cli/bin/python "
-                             "%s/scripts/colab_ccu.py" % _wsl_path(self.root)], timeout=90)
+        out = self.colab.run_script("colab_ccu.py", timeout=90)
         m = re.search(r"^CCU (\{.*\})\s*$", out, re.M)
         if not m:
             self._log("!! balance probe failed: %s" % (out.strip().splitlines() or ["?"])[-1][:160])
@@ -1497,8 +1525,10 @@ class Control:
             raw = ("rehearsal: a fake VM serving at %s" % self.fake_vm) if live else "rehearsal: no VM"
             answered = True
         else:
-            out = self._wsl_run(["wsl.exe", "-d", self.distro, "--", "bash", "-lc",
-                                 "$HOME/.local/bin/colab sessions"], timeout=120)
+            out = self._wsl_run(self.colab.script_argv("provision.py", ["sessions"]), timeout=120)
+            if _needs_sign_in(out) and self.colab.ready():
+                self._log("!! Colab asked for a sign-in: the saved one no longer works -- see the Colab section")
+                self.colab.check()
             sessions = _parse_sessions(out)
             raw = "\n".join(out.splitlines()[-6:])
             answered = bool(sessions) or "No active sessions found" in out
@@ -1545,20 +1575,20 @@ class Control:
         return sessions
 
     def _probe_cli(self) -> None:
-        if self.fake:
-            with self.lock:
-                self.state["cli"].update(colab="rehearsal", checked_at=time.time())
-        else:
-            argv = ["wsl.exe", "-d", self.distro, "--", "bash", "-lc",
-                    "test -x $HOME/.local/bin/colab && echo COLAB_OK || echo COLAB_MISSING"]
-            out = self._wsl_run(argv, timeout=120)
-            ok = "COLAB_OK" in out
-            with self.lock:
-                self.state["cli"].update(colab="ok" if ok else "missing", checked_at=time.time())
-            if not ok:
-                self._log("!! colab CLI not found in WSL %s (~/.local/bin/colab)" % self.distro)
-                self._probe_sessions()
-                return
+        """Startup: where the Colab CLI is and whom it is signed in as (the rail's
+        Colab guide), then -- once it can reach Colab -- the rest of the startup."""
+        snap = self.colab.probe()
+        self._sync_cli(snap)
+        if snap["stage"] != "connected":
+            self._log("[colab] %s -- the Colab section at the top of the rail has the next step"
+                      % snap["stage"])
+            return
+        self._after_connect()
+
+    def _after_connect(self) -> None:
+        """The CLI can reach Colab (at startup, or the moment the guide finishes): read
+        the balance, and look for a box that is already up."""
+        self._sync_cli(self.colab.snapshot())
         self._balance_soon()
         if self.external:
             self._probe_sessions()
@@ -1566,3 +1596,43 @@ class Control:
         # A box may already be up (started by hand, or before this process): take
         # it over instead of showing "no card" beside a VM that bills.
         self.couple("startup")
+
+    def _colab_ops(self) -> bool:
+        """Can anything that asks Colab run (sessions, the VM's files, up, down)?"""
+        return self.colab.ready()
+
+    def _sync_cli(self, snap: dict) -> None:
+        with self.lock:
+            self.state["cli"].update(
+                colab="rehearsal" if self.fake else
+                ("ok" if snap["stage"] == "connected" else
+                 "missing" if snap["stage"] in ("missing", "installing", "install_failed", "no_python")
+                 else "unknown" if snap["stage"] == "checking" else "signed_out"),
+                where=snap.get("where"), checked_at=time.time())
+
+    # ---- the Colab guide's buttons ----------------------------------------- #
+
+    def colab_install(self) -> dict:
+        return self.colab.install()
+
+    def colab_connect(self) -> dict:
+        return self.colab.connect()
+
+    def colab_cancel(self) -> dict:
+        return self.colab.cancel()
+
+    def colab_check(self) -> dict:
+        return self.colab.check()
+
+    def colab_disconnect(self) -> dict:
+        """Sign out -- unless a card is billing: without the token nothing here could
+        stop it any more, and it would bill until Colab reclaims it."""
+        with self.lock:
+            stage = self.state["stage"]
+            billing = (stage in ("requesting", "uploading", "bootstrapping", "loading",
+                                 "ready", "stopping")
+                       or self.ledger.get("open") is not None or self.downing
+                       or any(s.get("ours") for s in self.state["billing"].get("sessions") or []))
+        if billing:
+            return {"ok": False, "code": "colab_stop_first"}
+        return self.colab.disconnect()

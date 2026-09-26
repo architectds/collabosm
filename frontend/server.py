@@ -14,8 +14,9 @@ Routes
     /control/cancel         forget a pending confirmation
     /control/stop           stop the VM now (the point of the whole kit)
     /control/couple         find the running service on our session and attach to it
+    /control/colab/<act>    the Colab guide: install | connect | cancel | check | disconnect
     /v1/*  /props  /slots  /tools  /models/*  /cors-proxy
-                            proxied to the tunnel (key injected) or to --backend,
+                            proxied to the tunnel (key injected), or in a rehearsal to --backend,
                             with the model field rewritten
 
 The control plane is frontend/control.py: it drives scripts/up.sh over WSL,
@@ -217,14 +218,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _proxy(self, body=None):
         # Live tunnel if the box is up (the key is injected here and never
-        # reaches the browser), otherwise --backend, which is the local stub or
-        # the collabosm client proxy.
+        # reaches the browser); in a rehearsal, --backend (a local stub) instead.
         live = CONTROL.backend_base()
         if live is None and not ARGS.mock and not ARGS.fake_provision:
             return self._json(503, {"error": {"message": NO_LIVE_SESSION[self._lang()],
                                               "type": "no_live_session"}})
-        req = urllib.request.Request((live or ARGS.backend) + self.path,
-                                     data=body, method=self.command)
+        target = live or ARGS.backend
+        if not target:
+            return self._json(503, {"error": {
+                "message": "a rehearsal with nothing to chat with: start scripts/dev_stub.py "
+                           "and pass --backend http://127.0.0.1:8099",
+                "type": "no_backend"}})
+        req = urllib.request.Request(target + self.path, data=body, method=self.command)
         for k, v in self.headers.items():
             if k.lower() in ("host", "content-length", "accept-encoding", "connection", "cookie"):
                 continue
@@ -339,9 +344,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": {"message": "bad json"}})
             res = CONTROL.select(body.get("recipe"), confirm=bool(body.get("confirm")))
             status = {"unknown_recipe": 404, "busy": 409, "budget": 409, "placeholder": 409,
-                      "stop_first": 409, "stale_ledger": 409,
-                      "attached": 409}.get(res.get("code"), 200)
+                      "stop_first": 409, "stale_ledger": 409, "colab_setup": 409,
+                      "colab_native": 409, "attached": 409}.get(res.get("code"), 200)
             return self._json(status, res)
+        if path.startswith("/control/colab/"):
+            # the rail's Colab guide: each answers at once, the work runs behind it
+            act = {"install": CONTROL.colab_install, "connect": CONTROL.colab_connect,
+                   "cancel": CONTROL.colab_cancel, "check": CONTROL.colab_check,
+                   "disconnect": CONTROL.colab_disconnect}.get(path.rsplit("/", 1)[-1])
+            if act is None:
+                return self._json(404, {"error": {"message": "no such route", "path": path}})
+            res = act()
+            return self._json(200 if res.get("ok") else 409, res)
         if path == "/control/cancel":
             return self._json(200, CONTROL.cancel())
         if path == "/control/stop":
@@ -372,8 +386,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--port", type=int, default=int(os.environ.get("FRONTEND_PORT", 3020)))
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--backend", default=os.environ.get("FRONTEND_BACKEND", "http://127.0.0.1:8790"),
-                    help="OpenAI-compatible engine (or the collabosm client proxy)")
+    ap.add_argument("--backend", default=os.environ.get("FRONTEND_BACKEND"),
+                    help="rehearsals only (--mock, --fake-provision): an OpenAI-compatible "
+                         "engine to chat with, e.g. scripts/dev_stub.py at http://127.0.0.1:8099")
     ap.add_argument("--ctx", type=int, default=262144)
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--mock", action="store_true",
@@ -420,7 +435,10 @@ def main() -> int:
                                state_dir=ARGS.state_dir, persist_ledger=not ARGS.mock,
                                external=ARGS.external_endpoint,
                                external_key=ARGS.external_key,
-                               external_model=ARGS.external_model)
+                               external_model=ARGS.external_model,
+                               # rehearsal only: where the Colab guide starts (missing,
+                               # no_python, signed_out, expired, connected)
+                               fake_colab=os.environ.get("COLLABOSM_FAKE_COLAB"))
     mode = ("mock (nothing billed, nothing written)" if ARGS.mock
             else "rehearsal" if ARGS.fake_provision else "colab")
     print("[fe] control    %s -> wsl -d %s (idle stop %d min, budget %.0f CU)"
@@ -434,7 +452,8 @@ def main() -> int:
         return 2
     print("[fe] shell      http://%s:%d/" % (ARGS.host, ARGS.port), flush=True)
     print("[fe] webui      http://%s:%d/?embed=1" % (ARGS.host, ARGS.port), flush=True)
-    print("[fe] backend    %s" % ARGS.backend, flush=True)
+    if ARGS.backend:
+        print("[fe] backend    %s (rehearsal chat)" % ARGS.backend, flush=True)
     ThreadingHTTPServer((ARGS.host, ARGS.port), Handler).serve_forever()
     return 0
 

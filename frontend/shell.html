@@ -239,6 +239,31 @@
   .fold-head[aria-expanded="true"] .chev { transform: rotate(180deg); }
   .fold-body { padding: 0 20px 20px; }
 
+  .fold-sum.hot { color: var(--fg); font-weight: 600; }
+
+  /* ---- the Colab guide: install, sign in, compute units --------------- */
+  .guide { list-style: none; margin: 0; padding: 0; }
+  .guide > li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 10px; padding: 10px 0; }
+  .guide > li + li { border-top: 1px solid var(--line); }
+  .guide .gi { display: grid; place-items: center; height: 19px; color: var(--faint); }
+  .guide li.done .gi, .guide li.now .gi, .guide li.warn .gi { color: var(--fg); }
+  .guide li.busy .gi .ico { border-radius: 50%; animation: breathe 1.4s ease-in-out infinite; }
+  .guide .gh { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .guide .gh b { flex: none; font-size: 12.5px; font-weight: 600; }
+  .guide li.todo .gh b { color: var(--faint); font-weight: 500; }
+  .guide .gh span {
+    margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  .guide p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+  .guide p.warn { color: var(--fg); }
+  .guide .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+  .guide .row .btn { width: auto; height: 30px; margin: 0; padding: 0 12px; font-size: 12px; }
+  .guide a { color: var(--fg); font-size: 12px; text-underline-offset: 2px; }
+  .guide .info { color: var(--faint); cursor: help; display: inline-grid; }
+  .guide pre.log { margin-top: 10px; max-height: 120px; }
+  .guide + .fine { margin-top: 4px; }
+
   /* ---- GPUs ------------------------------------------------------------ */
   .gpu { padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; }
   .gpu + .gpu { margin-top: 10px; }
@@ -333,6 +358,7 @@
   <iframe id="ui" src="/?embed=1" title="collabosm chat" allow="clipboard-write; clipboard-read"></iframe>
   <aside id="rail">
     <p id="toast" role="status" aria-live="polite" hidden></p>
+    <section class="fold" id="f-colab"></section>
     <section id="s-status"></section>
     <section class="fold" id="f-gpus"></section>
     <section class="fold" id="f-speed"></section>
@@ -363,10 +389,10 @@ const I18N = {
     'btn.stop': 'Stop', 'btn.detach': 'Detach',
     'toggle.hide': 'Hide panel (Ctrl/⌘ B)', 'toggle.show': 'Show panel (Ctrl/⌘ B)',
     'lang.label': 'Language', 'copied': 'Endpoint copied.',
-    'tip.stop.ready': 'Stop the VM and end billing (runs down.sh).',
+    'tip.stop.ready': 'Stop the VM and end billing.',
     'tip.stop.job': 'Cancel the job and stop the VM it may have started.',
-    'tip.stop.failed': 'Run the stop again (down.sh), for a VM the failure may have left billing.',
-    'tip.stop.stale': 'Close the session the ledger never closed (runs down.sh first).',
+    'tip.stop.failed': 'Run the stop again, for a VM the failure may have left billing.',
+    'tip.stop.stale': 'Close the session the ledger never closed (its VM is stopped first).',
     'tip.stop.vm': 'Stop the VM that is billing on our session.',
     'tip.stop.attached': 'Detach from the external endpoint. Nothing is stopped: we did not start it.',
     'stage.idle': 'No card', 'stage.requesting': 'Requesting', 'stage.uploading': 'Uploading',
@@ -446,9 +472,51 @@ const I18N = {
     'speed.src.proxy': 'Last reply; only its first token is timed (this server does not report speed) · {ago} ago.',
     'speed.where': 'Measured for {recipe}, not in this session.',
     'speed.none': 'No speed measured for {recipe} yet.',
-    'sec.conn': 'Connection', 'conn.sum': 'CLI {cli} · {n} billing',
-    'tip.cli': 'Colab CLI inside WSL', 'tip.wsl': 'WSL distro',
-    'cli.ok': 'found', 'cli.missing': 'missing', 'cli.unknown': 'checking…', 'cli.rehearsal': 'rehearsal',
+    'sec.conn': 'Connection', 'conn.sum': '{n} billing',
+    'sec.colab': 'Colab',
+    'colab.sum.ok': '{account}',
+    'colab.sum.todo': '{n}/3 · {step}',
+    'colab.step.cli': 'Colab CLI',
+    'colab.step.account': 'Google account',
+    'colab.step.cu': 'Compute units',
+    'colab.cli.checking': 'Looking for the Colab CLI…',
+    'colab.cli.missing': 'Google’s official command-line tool; collabosm reaches your Colab through it. It installs into collabosm’s own folder and changes nothing else on this PC.',
+    'colab.cli.broken': 'Found, but it does not start: {why}. Installing again repairs it.',
+    'colab.cli.installing': 'Installing google-colab-cli…',
+    'colab.cli.failed': 'The install stopped at {step} (exit {rc}).',
+    'colab.cli.no_python': 'Installing needs Python 3.12 or newer, or uv (this Python is {have}). Install one, then check again.',
+    'colab.cli.ok': '{version} · {where}',
+    'colab.where.native': 'this computer',
+    'colab.where.wsl': 'WSL {distro}',
+    'colab.account.signed_out': 'Sign in with Google and allow access once. The token stays on this PC.',
+    'colab.account.authorizing': 'Allow access in the browser tab that just opened…',
+    'colab.account.link': 'No tab? Open the sign-in page',
+    'colab.account.expired': 'This sign-in no longer works: {why}.',
+    'colab.expired.expired': 'it was revoked or has expired',
+    'colab.expired.invalid': 'the token file cannot be read',
+    'colab.expired.scopes': 'it lacks the Colab permission',
+    'colab.account.unverified': 'Signed in, but Google could not be reached to confirm it: {why}',
+    'colab.auth.err': 'Not connected: {why}.',
+    'colab.auth.access_denied': 'access was declined on the Google page',
+    'colab.auth.timeout': 'no answer from the browser within 5 minutes',
+    'tip.colab.scopes': 'The consent page shows Google’s own SDK app: that is the Colab CLI’s client. It asks for Colab, Drive (only files this app uses) and Cloud Platform — the CLI’s fixed set.',
+    'colab.cu.reading': 'Reading the balance from Colab…',
+    'colab.cu.ok': '{cu} CU',
+    'colab.cu.rehearsal': 'rehearsal',
+    'colab.cu.none': 'No compute units left. An A100 needs a paid plan or pay-as-you-go units.',
+    'colab.cu.plans': 'Colab plans',
+    'colab.log': 'Install log',
+    'btn.colab.install': 'Install',
+    'btn.colab.retry': 'Try again',
+    'btn.colab.connect': 'Connect Google account',
+    'btn.colab.reconnect': 'Connect again',
+    'btn.colab.cancel': 'Cancel',
+    'btn.colab.check': 'Check again',
+    'btn.colab.disconnect': 'Disconnect',
+    'btn.colab.python': 'Get Python',
+    'tip.colab.disconnect': 'Revoke the sign-in at Google and delete the token from this PC. The Colab CLI shares it.',
+    'colab.disconnect.confirm': 'Disconnect this Google account from collabosm? The Colab CLI on this PC is signed out too.',
+    'gpus.need_colab': 'Finish the Colab section above to start a card.',
     'session.ours': 'ours',
     'det.command': 'Command it runs', 'det.command.none': 'Generated when you first start a recipe.',
     'det.billing': 'Raw billing output', 'det.billing.none': 'Not probed yet.',
@@ -470,11 +538,11 @@ const I18N = {
     'note.stopping': 'Stopping ({reason}).',
     'note.stopped': 'Stopped ({reason}). This session cost about {cu} CU.',
     'note.detached': 'Detached from the external endpoint. There was no instance to stop.',
-    'note.ledger.stale': 'The ledger holds a session that was never closed: the frontend probably exited with a box up, and it may still be billing. Stop runs down.sh and closes it.',
+    'note.ledger.stale': 'The ledger holds a session that was never closed: the frontend probably exited with a box up, and it may still be billing. Stop stops it and closes the entry.',
     'note.fail.spawn': 'Could not launch the command: {err}.',
     'note.fail.read': 'Reading the job log failed: {err}.',
-    'note.fail.noready': 'up.sh exited cleanly but never reported READY. See the log.',
-    'note.fail.exit': 'up.sh exited with {rc}: {why}',
+    'note.fail.noready': 'The start exited cleanly but never reported READY. See the log.',
+    'note.fail.exit': 'The start exited with {rc}: {why}',
     'note.coupling': 'Looking for the service on the VM…',
     'note.coupled': 'Took over the service running on session {session}. Its billing is tracked here, from the VM’s own uptime.',
     'note.vm.live': 'A VM is billing on session {session}, but its service does not answer (VM stage: {stage}).',
@@ -482,7 +550,7 @@ const I18N = {
     'note.link.down': 'The tunnel stopped answering; asking the VM where the service is now…',
     'note.link.moved': 'The tunnel moved to a new address; reconnected.',
     'autostop.running': ' Stopping the box so a failed run does not keep billing…',
-    'autostop.done': ' The box was stopped automatically (down.sh).',
+    'autostop.done': ' The box was stopped automatically.',
     'vm.probing': 'checking the card', 'vm.runtime': 'installing the ExLlamaV3 runtime',
     'vm.weights': 'pulling weights from Hugging Face', 'vm.env': 'writing the launch environment',
     'vm.bootstrapped': 'bootstrap done, starting the model server',
@@ -503,7 +571,7 @@ const I18N = {
     'reason.manual': 'manual', 'reason.idle': 'idle', 'reason.max_hours': 'session ceiling',
     'reason.job_timeout': 'job timeout', 'reason.failed': 'failed', 'reason.stale': 'unclosed session',
     'reason.vm_gone': 'VM gone',
-    'foot.control': 'Control plane: WSL → colab CLI → recipe.py → up.sh',
+    'foot.control': 'Control plane: Colab CLI → recipe.py → provision.py',
     'foot.external': 'External endpoint {base}; no instance was requested from this machine.',
     'foot.billing': 'Billing started: {card} · {cuph} CU/h',
     'foot.stopped': 'Stopped ({reason}). The control plane is up; the VM is not.',
@@ -527,6 +595,10 @@ const I18N = {
     'code.probe_failed': 'Could not ask Colab which sessions are live (colab sessions did not answer).',
     'code.placeholder': 'This recipe cannot run yet.',
     'code.superseded': 'A stop or a new start happened while this was looking; nothing was taken over.',
+    'code.colab_setup': 'Finish the Colab setup first (the Colab section at the top).',
+    'code.colab_busy': 'The Colab setup is busy; try again in a moment.',
+    'code.colab_stop_first': 'A card is billing. Stop it before disconnecting — without the sign-in it could not be stopped from here.',
+    'code.colab_disconnected': 'Signing out of Google…',
   },
   zh: {
     'hdr.loading': '正在读取控制面…',
@@ -535,10 +607,10 @@ const I18N = {
     'btn.stop': '停机', 'btn.detach': '断开',
     'toggle.hide': '收起面板（Ctrl/⌘ B）', 'toggle.show': '展开面板（Ctrl/⌘ B）',
     'lang.label': '语言', 'copied': '端点已复制。',
-    'tip.stop.ready': '停掉 VM、结束计费（运行 down.sh）。',
+    'tip.stop.ready': '停掉 VM、结束计费。',
     'tip.stop.job': '取消任务，并停掉它可能已经起的 VM。',
-    'tip.stop.failed': '再停一次（down.sh），防止失败留下一台还在计费的 VM。',
-    'tip.stop.stale': '关掉账本里没关的会话（先运行 down.sh）。',
+    'tip.stop.failed': '再停一次，防止失败留下一台还在计费的 VM。',
+    'tip.stop.stale': '关掉账本里没关的会话（先停掉它的 VM）。',
     'tip.stop.vm': '停掉我们会话上正在计费的 VM。',
     'tip.stop.attached': '断开外部端点。不会停任何东西：它不是我们启动的。',
     'stage.idle': '无卡无模型', 'stage.requesting': '申请中', 'stage.uploading': '上传工具包',
@@ -618,9 +690,51 @@ const I18N = {
     'speed.src.proxy': '最近一次回复；只计了首字时间（这个服务端不上报速度）· {ago}前。',
     'speed.where': '{recipe} 的实测值，不是本次会话的数字。',
     'speed.none': '{recipe} 还没有实测速度。',
-    'sec.conn': '连接', 'conn.sum': 'CLI {cli} · {n} 个计费',
-    'tip.cli': 'WSL 里的 Colab CLI', 'tip.wsl': 'WSL 发行版',
-    'cli.ok': '已找到', 'cli.missing': '未找到', 'cli.unknown': '检查中…', 'cli.rehearsal': '演练',
+    'sec.conn': '连接', 'conn.sum': '{n} 个计费',
+    'sec.colab': 'Colab',
+    'colab.sum.ok': '{account}',
+    'colab.sum.todo': '{n}/3 · {step}',
+    'colab.step.cli': 'Colab CLI',
+    'colab.step.account': 'Google 账号',
+    'colab.step.cu': '计算单元',
+    'colab.cli.checking': '正在查找 Colab CLI…',
+    'colab.cli.missing': 'Google 官方命令行工具，collabosm 通过它连接你的 Colab。它装在 collabosm 自己的目录里，不改动这台电脑上的其他东西。',
+    'colab.cli.broken': '找到了，但无法启动：{why}。重新安装即可修复。',
+    'colab.cli.installing': '正在安装 google-colab-cli…',
+    'colab.cli.failed': '安装在 {step} 这一步失败（退出码 {rc}）。',
+    'colab.cli.no_python': '安装需要 Python 3.12 或更高版本，或者 uv（当前 Python 是 {have}）。装好其中一个后，再点“重新检查”。',
+    'colab.cli.ok': '{version} · {where}',
+    'colab.where.native': '本机',
+    'colab.where.wsl': 'WSL {distro}',
+    'colab.account.signed_out': '用 Google 登录并授权一次，令牌只保存在这台电脑上。',
+    'colab.account.authorizing': '请在刚打开的浏览器标签页里点“允许”…',
+    'colab.account.link': '没有弹出？打开登录页',
+    'colab.account.expired': '这次登录已失效：{why}。',
+    'colab.expired.expired': '授权已被撤销或过期',
+    'colab.expired.invalid': '令牌文件无法读取',
+    'colab.expired.scopes': '缺少 Colab 权限',
+    'colab.account.unverified': '已登录，但暂时联系不上 Google 来确认：{why}',
+    'colab.auth.err': '未连接：{why}。',
+    'colab.auth.access_denied': '在 Google 页面上拒绝了授权',
+    'colab.auth.timeout': '5 分钟内浏览器没有回应',
+    'tip.colab.scopes': '授权页上显示的是 Google 自己的 SDK 应用——那就是 Colab CLI 的客户端。它申请 Colab、Drive（仅限本应用用到的文件）和 Cloud Platform 权限，这是 CLI 固定的一套。',
+    'colab.cu.reading': '正在从 Colab 读取余额…',
+    'colab.cu.ok': '{cu} CU',
+    'colab.cu.rehearsal': '演练',
+    'colab.cu.none': '没有剩余计算单元。A100 需要付费计划或按量购买的计算单元。',
+    'colab.cu.plans': 'Colab 计划',
+    'colab.log': '安装日志',
+    'btn.colab.install': '安装',
+    'btn.colab.retry': '重试',
+    'btn.colab.connect': '连接 Google 账号',
+    'btn.colab.reconnect': '重新连接',
+    'btn.colab.cancel': '取消',
+    'btn.colab.check': '重新检查',
+    'btn.colab.disconnect': '断开',
+    'btn.colab.python': '获取 Python',
+    'tip.colab.disconnect': '在 Google 撤销这次授权，并删除这台电脑上的令牌（Colab CLI 也共用它）。',
+    'colab.disconnect.confirm': '要把这个 Google 账号从 collabosm 断开吗？这台电脑上的 Colab CLI 也会一起退出登录。',
+    'gpus.need_colab': '先完成上方的 Colab 设置，才能开机。',
     'session.ours': '我们的',
     'det.command': '要跑的命令', 'det.command.none': '第一次启动配方时生成。',
     'det.billing': '服务端账目原文', 'det.billing.none': '还没探测。',
@@ -642,11 +756,11 @@ const I18N = {
     'note.stopping': '正在停机（{reason}）。',
     'note.stopped': '已停机（{reason}），这次约 {cu} CU。',
     'note.detached': '已断开外部端点（没有实例可以停）。',
-    'note.ledger.stale': '账本里有一个没关的会话：前端大概是在有卡时退出的，VM 可能还在计费。点“停机”会跑 down.sh 并关账。',
+    'note.ledger.stale': '账本里有一个没关的会话：前端大概是在有卡时退出的，VM 可能还在计费。点“停机”会停掉它并关账。',
     'note.fail.spawn': '启动不了命令：{err}。',
     'note.fail.read': '读日志失败：{err}。',
-    'note.fail.noready': 'up.sh 正常退出，但没等到 READY（看日志）。',
-    'note.fail.exit': 'up.sh 退出码 {rc}：{why}',
+    'note.fail.noready': '开机流程正常退出，但没等到 READY（看日志）。',
+    'note.fail.exit': '开机流程退出码 {rc}：{why}',
     'note.coupling': '正在寻找 VM 上的服务…',
     'note.coupled': '已接管会话 {session} 上正在运行的服务；从 VM 实际启动的时间起在这里记账。',
     'note.vm.live': '会话 {session} 上有一台 VM 在计费，但服务没有响应（VM 阶段：{stage}）。',
@@ -654,7 +768,7 @@ const I18N = {
     'note.link.down': '隧道没有响应，正在问 VM 服务现在在哪…',
     'note.link.moved': '隧道换了新地址，已重新连上。',
     'autostop.running': '正在停机，免得失败的实例继续计费…',
-    'autostop.done': '已自动停机（down.sh）。',
+    'autostop.done': '已自动停机。',
     'vm.probing': '校验卡', 'vm.runtime': '安装 ExLlamaV3 运行时',
     'vm.weights': '从 Hugging Face 拉权重', 'vm.env': '写入启动环境',
     'vm.bootstrapped': '引导完成，正在起模型服务',
@@ -674,7 +788,7 @@ const I18N = {
     'reason.manual': '手动', 'reason.idle': '空闲', 'reason.max_hours': '达到连续上限',
     'reason.job_timeout': '任务超时', 'reason.failed': '失败', 'reason.stale': '未关的会话',
     'reason.vm_gone': 'VM 已不在',
-    'foot.control': '控制面：WSL → colab CLI → recipe.py → up.sh',
+    'foot.control': '控制面：Colab CLI → recipe.py → provision.py',
     'foot.external': '外部端点 {base}；本机没有申请实例。',
     'foot.billing': '计费已开始：{card} · {cuph} CU/h',
     'foot.stopped': '已停机（{reason}）。控制面在，VM 不在。',
@@ -698,6 +812,10 @@ const I18N = {
     'code.probe_failed': '问不到 Colab 哪些会话在跑（colab sessions 没有响应）。',
     'code.placeholder': '这个配方还不能运行。',
     'code.superseded': '查找期间已经停机或重新启动，没有接管任何东西。',
+    'code.colab_setup': '请先完成 Colab 设置（右栏顶部的 Colab 区）。',
+    'code.colab_busy': 'Colab 设置正在进行，请稍后再试。',
+    'code.colab_stop_first': '有机器正在计费。请先停机再断开——没有登录就无法从这里停掉它。',
+    'code.colab_disconnected': '正在退出 Google 登录…',
   },
   ja: {
     'hdr.loading': 'コントロールプレーンを読み込み中…',
@@ -706,10 +824,10 @@ const I18N = {
     'btn.stop': '停止', 'btn.detach': '切断',
     'toggle.hide': 'パネルを閉じる（Ctrl/⌘ B）', 'toggle.show': 'パネルを開く（Ctrl/⌘ B）',
     'lang.label': '言語', 'copied': 'エンドポイントをコピーしました。',
-    'tip.stop.ready': 'VM を停止して課金を終えます（down.sh を実行）。',
+    'tip.stop.ready': 'VM を停止して課金を終えます。',
     'tip.stop.job': 'ジョブを取り消し、起動済みかもしれない VM を停止します。',
-    'tip.stop.failed': 'もう一度停止します（down.sh）。失敗で課金中の VM が残らないように。',
-    'tip.stop.stale': '記帳で閉じられていないセッションを閉じます（先に down.sh を実行）。',
+    'tip.stop.failed': 'もう一度停止します。失敗で課金中の VM が残らないように。',
+    'tip.stop.stale': '記帳で閉じられていないセッションを閉じます（先にその VM を停止）。',
     'tip.stop.vm': '自分のセッションで課金中の VM を停止します。',
     'tip.stop.attached': '外部エンドポイントから切断します。私たちが起動したものではないので、何も停止しません。',
     'stage.idle': 'カードなし', 'stage.requesting': '申請中', 'stage.uploading': 'アップロード中',
@@ -789,9 +907,51 @@ const I18N = {
     'speed.src.proxy': '直近の返信。初回トークンのみ計測（このサーバーは速度を報告しません）· {ago}前。',
     'speed.where': '{recipe} の実測値で、このセッションの数値ではありません。',
     'speed.none': '{recipe} の速度はまだ実測していません。',
-    'sec.conn': '接続', 'conn.sum': 'CLI {cli} · 課金中 {n}',
-    'tip.cli': 'WSL 内の Colab CLI', 'tip.wsl': 'WSL ディストリ',
-    'cli.ok': 'あり', 'cli.missing': 'なし', 'cli.unknown': '確認中…', 'cli.rehearsal': 'リハーサル',
+    'sec.conn': '接続', 'conn.sum': '課金中 {n}',
+    'sec.colab': 'Colab',
+    'colab.sum.ok': '{account}',
+    'colab.sum.todo': '{n}/3 · {step}',
+    'colab.step.cli': 'Colab CLI',
+    'colab.step.account': 'Google アカウント',
+    'colab.step.cu': 'コンピューティング ユニット',
+    'colab.cli.checking': 'Colab CLI を探しています…',
+    'colab.cli.missing': 'Google 公式のコマンドラインツールです。collabosm はこれを通じて Colab に接続します。collabosm 専用のフォルダーにインストールされ、この PC のほかの部分は変更しません。',
+    'colab.cli.broken': '見つかりましたが起動できません：{why}。再インストールで直ります。',
+    'colab.cli.installing': 'google-colab-cli をインストールしています…',
+    'colab.cli.failed': 'インストールが {step} で止まりました（終了コード {rc}）。',
+    'colab.cli.no_python': 'インストールには Python 3.12 以降か uv が必要です（この Python は {have}）。どちらかを入れてから、もう一度確認してください。',
+    'colab.cli.ok': '{version} · {where}',
+    'colab.where.native': 'このコンピューター',
+    'colab.where.wsl': 'WSL {distro}',
+    'colab.account.signed_out': 'Google でログインし、一度だけアクセスを許可してください。トークンはこの PC にだけ保存されます。',
+    'colab.account.authorizing': '開いたブラウザーのタブで「許可」を押してください…',
+    'colab.account.link': 'タブが開かない場合はログインページを開く',
+    'colab.account.expired': 'このログインは使えなくなっています：{why}。',
+    'colab.expired.expired': '取り消されたか期限切れです',
+    'colab.expired.invalid': 'トークンファイルを読み取れません',
+    'colab.expired.scopes': 'Colab の権限がありません',
+    'colab.account.unverified': 'ログイン済みですが、Google に確認できませんでした：{why}',
+    'colab.auth.err': '接続されていません：{why}。',
+    'colab.auth.access_denied': 'Google のページでアクセスが拒否されました',
+    'colab.auth.timeout': '5 分以内にブラウザーから応答がありませんでした',
+    'tip.colab.scopes': '同意画面には Google 自身の SDK アプリが表示されます。これが Colab CLI のクライアントです。Colab、Drive（このアプリが使うファイルのみ）、Cloud Platform を求めます。CLI の固定のセットです。',
+    'colab.cu.reading': 'Colab から残高を読み取っています…',
+    'colab.cu.ok': '{cu} CU',
+    'colab.cu.rehearsal': 'リハーサル',
+    'colab.cu.none': 'コンピューティング ユニットが残っていません。A100 には有料プランか従量課金のユニットが必要です。',
+    'colab.cu.plans': 'Colab のプラン',
+    'colab.log': 'インストールログ',
+    'btn.colab.install': 'インストール',
+    'btn.colab.retry': '再試行',
+    'btn.colab.connect': 'Google アカウントを接続',
+    'btn.colab.reconnect': 'もう一度接続',
+    'btn.colab.cancel': 'キャンセル',
+    'btn.colab.check': 'もう一度確認',
+    'btn.colab.disconnect': '切断',
+    'btn.colab.python': 'Python を入手',
+    'tip.colab.disconnect': 'Google でこのログインを取り消し、この PC のトークンを削除します（Colab CLI も共有しています）。',
+    'colab.disconnect.confirm': 'この Google アカウントを collabosm から切断しますか？この PC の Colab CLI もログアウトします。',
+    'gpus.need_colab': '上の Colab セクションを完了するとカードを起動できます。',
     'session.ours': '自分の',
     'det.command': '実行するコマンド', 'det.command.none': '最初にレシピを起動すると生成されます。',
     'det.billing': 'サーバー側の課金出力', 'det.billing.none': 'まだ確認していません。',
@@ -813,11 +973,11 @@ const I18N = {
     'note.stopping': '停止中（{reason}）。',
     'note.stopped': '停止しました（{reason}）。今回は約 {cu} CU。',
     'note.detached': '外部エンドポイントから切断しました（停止するインスタンスはありません）。',
-    'note.ledger.stale': '閉じられていないセッションが記帳に残っています。カード稼働中にフロントエンドが終了した可能性があり、まだ課金中かもしれません。「停止」で down.sh を実行し、記帳を閉じます。',
+    'note.ledger.stale': '閉じられていないセッションが記帳に残っています。カード稼働中にフロントエンドが終了した可能性があり、まだ課金中かもしれません。「停止」で VM を止め、記帳を閉じます。',
     'note.fail.spawn': 'コマンドを起動できません：{err}。',
     'note.fail.read': 'ジョブログの読み取りに失敗：{err}。',
-    'note.fail.noready': 'up.sh は正常終了しましたが、READY になりませんでした（ログ参照）。',
-    'note.fail.exit': 'up.sh 終了コード {rc}：{why}',
+    'note.fail.noready': '起動処理は正常終了しましたが、READY になりませんでした（ログ参照）。',
+    'note.fail.exit': '起動処理の終了コード {rc}：{why}',
     'note.coupling': 'VM 上のサービスを探しています…',
     'note.coupled': 'セッション {session} で稼働中のサービスを引き継ぎました。課金は VM の実際の起動時刻から、ここで記帳します。',
     'note.vm.live': 'セッション {session} の VM が課金中ですが、サービスが応答しません（VM ステージ：{stage}）。',
@@ -825,7 +985,7 @@ const I18N = {
     'note.link.down': 'トンネルが応答しません。サービスの現在地を VM に問い合わせています…',
     'note.link.moved': 'トンネルのアドレスが変わりました。再接続しました。',
     'autostop.running': '失敗したまま課金が続かないよう、インスタンスを停止中…',
-    'autostop.done': 'インスタンスは自動で停止しました（down.sh）。',
+    'autostop.done': 'インスタンスは自動で停止しました。',
     'vm.probing': 'カードを確認中', 'vm.runtime': 'ExLlamaV3 ランタイムを導入中',
     'vm.weights': 'Hugging Face から重みを取得中', 'vm.env': '起動環境を書き込み中',
     'vm.bootstrapped': 'ブートストラップ完了、モデルサーバーを起動中',
@@ -845,7 +1005,7 @@ const I18N = {
     'reason.manual': '手動', 'reason.idle': 'アイドル', 'reason.max_hours': '連続上限',
     'reason.job_timeout': 'ジョブタイムアウト', 'reason.failed': '失敗', 'reason.stale': '未クローズのセッション',
     'reason.vm_gone': 'VM 消失',
-    'foot.control': 'コントロールプレーン：WSL → colab CLI → recipe.py → up.sh',
+    'foot.control': 'コントロールプレーン：Colab CLI → recipe.py → provision.py',
     'foot.external': '外部エンドポイント {base}。このマシンからはインスタンスを申請していません。',
     'foot.billing': '課金開始：{card} · {cuph} CU/h',
     'foot.stopped': '停止しました（{reason}）。コントロールプレーンは稼働中、VM は停止。',
@@ -869,13 +1029,18 @@ const I18N = {
     'code.probe_failed': 'どのセッションが稼働中か Colab に確認できません（colab sessions が応答しません）。',
     'code.placeholder': 'このレシピはまだ実行できません。',
     'code.superseded': '確認中に停止または新しい起動があったため、何も引き継いでいません。',
+    'code.colab_setup': '先に Colab の設定を完了してください（上部の Colab セクション）。',
+    'code.colab_busy': 'Colab の設定を処理中です。少し待ってからもう一度お試しください。',
+    'code.colab_stop_first': '課金中のカードがあります。切断する前に停止してください。ログインがないと、ここから停止できなくなります。',
+    'code.colab_disconnected': 'Google からログアウトしています…',
   },
 };
 const HTML_LANG = { en: 'en', zh: 'zh-CN', ja: 'ja' };
 const LOCALE = { en: 'en-US', zh: 'zh-CN', ja: 'ja-JP' };
 const STEPS = ['requesting', 'uploading', 'bootstrapping', 'loading', 'ready'];
 const BUSY = ['requesting', 'uploading', 'bootstrapping', 'loading', 'stopping'];
-const QUIET = ['confirm_required', 'started', 'cancelled', 'stopping', 'coupling'];
+const QUIET = ['confirm_required', 'started', 'cancelled', 'stopping', 'coupling',
+               'colab_installing', 'colab_authorizing', 'colab_checking', 'colab_cancelled'];
 // the recipe facts a card shows, in this order (the registry may carry more)
 const FACT_ORDER = ['prefill_tps', 'decode_tps', 'context', 'vision', 'concurrency', 'vram_mib', 'weights', 'eta_min'];
 
@@ -918,6 +1083,14 @@ const ICONS = {
   scroll: '<path d="M15 12h-5M15 8h-5M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/>',
   plug: '<path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
   box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/>',
+  compass: '<circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z"/>',
+  ring: '<circle cx="12" cy="12" r="9"/>',
+  alert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  user: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1070,17 +1243,126 @@ function factValue(k, f) {
 function isOpen(id) {
   if (id in folds) return !!folds[id];
   const s = st ? st.stage : 'idle';
+  if (id === 'colab') return true;      // open on the first launch; the viewer's choice after that
   if (id === 'gpus') return ['idle', 'stopped', 'failed'].includes(s) || !!(st && st.confirm);
   if (id === 'log') return s === 'failed';
   return false;
 }
 
-function foldHTML(id, icon, title, body) {
+// hot: the one-line summary needs the viewer (a step of the Colab guide is waiting)
+function foldHTML(id, icon, title, body, hot) {
   const open = isOpen(id);
   return '<h2><button type="button" class="fold-head" data-act="fold" data-fold="' + id + '" aria-expanded="'
     + open + '" aria-controls="b-' + id + '">' + ico(icon) + '<span>' + esc(title) + '</span>'
-    + '<span class="fold-sum" data-v="sum-' + id + '"></span>' + ico('chevron', 'chev') + '</button></h2>'
+    + '<span class="fold-sum' + (hot ? ' hot' : '') + '" data-v="sum-' + id + '"></span>' + ico('chevron', 'chev') + '</button></h2>'
     + (open ? '<div class="fold-body" id="b-' + id + '">' + body() + '</div>' : '');
+}
+
+// ---- the Colab guide: install the CLI, sign in, compute units ------------------ //
+function colab() { return (st && st.colab) || { stage: 'checking' }; }
+function colabReady() { return colab().stage === 'connected'; }
+
+// which of the three steps is the viewer's to take: 0 CLI, 1 account, 2 compute units, 3 none
+function colabStep() {
+  const c = colab();
+  if (['checking', 'missing', 'installing', 'install_failed', 'no_python'].includes(c.stage)) return 0;
+  if (c.stage !== 'connected') return 1;
+  const b = st.balance;
+  if (!st.fake && (!b || b.cu === null || b.cu === undefined || b.cu <= 0)) return 2;
+  return 3;
+}
+
+function gstep(cls, icon, title, value, body) {
+  return '<li class="' + cls + '"><span class="gi">' + ico(icon) + '</span><div>'
+    + '<div class="gh"><b>' + esc(title) + '</b>' + (value ? '<span>' + esc(value) + '</span>' : '') + '</div>'
+    + (body || '') + '</div></li>';
+}
+
+function colabWhy(err) {
+  const a = (err && err.a) || {};
+  return a.why === undefined ? '' : String(a.why);
+}
+
+function colabHTML() {
+  const c = colab(), err = c.error || {};
+  const row = (...b) => '<div class="row">' + b.join('') + '</div>';
+  const small = (act, label, icon, attrs) => btn(act, label, '', icon, attrs);
+  let h = '<ol class="guide">';
+
+  // 1 -- the Colab CLI
+  if (c.stage === 'checking') {
+    h += gstep('now busy', 'ring', t('colab.step.cli'), '…', '<p>' + esc(t('colab.cli.checking')) + '</p>');
+  } else if (c.stage === 'missing') {
+    h += gstep('now', 'ring', t('colab.step.cli'), '',
+      (err.k === 'broken' ? '<p class="warn">' + esc(t('colab.cli.broken', { why: colabWhy(err) })) + '</p>'
+                          : '<p>' + esc(t('colab.cli.missing')) + '</p>')
+      + row(btn('colab-install', t('btn.colab.install'), 'primary', 'download')));
+  } else if (c.stage === 'installing') {
+    h += gstep('now busy', 'ring', t('colab.step.cli'), '', '<p>' + esc(t('colab.cli.installing')) + '</p>'
+      + '<pre class="log" data-v="colablog"></pre>');
+  } else if (c.stage === 'install_failed') {
+    const a = err.a || {};
+    h += gstep('warn', 'alert', t('colab.step.cli'), '',
+      '<p class="warn">' + esc(t('colab.cli.failed', { step: a.step || '?', rc: a.rc ?? '?' })) + '</p>'
+      + row(btn('colab-install', t('btn.colab.retry'), 'primary', 'refresh'))
+      + details('colablog', t('colab.log'), (c.log || []).join('\n')));
+  } else if (c.stage === 'no_python') {
+    h += gstep('warn', 'alert', t('colab.step.cli'), '',
+      '<p class="warn">' + esc(t('colab.cli.no_python', { have: (err.a || {}).have || '?' })) + '</p>'
+      + row('<a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer">'
+            + esc(t('btn.colab.python')) + '</a>', small('colab-check', t('btn.colab.check'), 'refresh')));
+  } else {
+    const where = c.where === 'wsl' ? t('colab.where.wsl', { distro: c.distro || 'WSL' }) : t('colab.where.native');
+    h += gstep('done', 'okc', t('colab.step.cli'), t('colab.cli.ok', { version: c.version || '?', where }));
+  }
+
+  // 2 -- the Google account
+  const scopes = '<span class="info" tabindex="0" data-tip="' + esc(t('tip.colab.scopes')) + '">' + ico('info') + '</span>';
+  if (colabStep() === 0) {
+    h += gstep('todo', 'dashed', t('colab.step.account'));
+  } else if (c.stage === 'signed_out') {
+    const why = err.k === 'auth' ? colabWhy(err) : '';
+    h += gstep('now', 'ring', t('colab.step.account'), '',
+      (why ? '<p class="warn">' + esc(t('colab.auth.err', { why: t('colab.auth.' + why, null, why) })) + '</p>' : '')
+      + '<p>' + esc(t('colab.account.signed_out')) + '</p>'
+      + row(btn('colab-connect', t('btn.colab.connect'), 'primary', 'user'), scopes));
+  } else if (c.stage === 'authorizing') {
+    h += gstep('now busy', 'ring', t('colab.step.account'), '',
+      '<p>' + esc(t('colab.account.authorizing')) + '</p>'
+      + row((c.auth_url ? '<a href="' + esc(c.auth_url) + '" target="_blank" rel="noopener noreferrer">'
+                           + esc(t('colab.account.link')) + '</a>' : ''),
+            small('colab-cancel', t('btn.colab.cancel'), 'x')));
+  } else if (c.stage === 'expired') {
+    h += gstep('warn', 'alert', t('colab.step.account'), c.account || '',
+      '<p class="warn">' + esc(t('colab.account.expired', { why: t('colab.expired.' + colabWhy(err), null, colabWhy(err)) })) + '</p>'
+      + row(btn('colab-connect', t('btn.colab.reconnect'), 'primary', 'user'), scopes));
+  } else {
+    const unverified = c.verified === false;
+    h += gstep(unverified ? 'warn' : 'done', unverified ? 'alert' : 'okc', t('colab.step.account'), c.account || '',
+      (unverified ? '<p class="warn">' + esc(t('colab.account.unverified', { why: colabWhy(err) })) + '</p>' : '')
+      + row((unverified ? small('colab-check', t('btn.colab.check'), 'refresh') : ''),
+            small('colab-disconnect', t('btn.colab.disconnect'), 'logout',
+                  'data-tip="' + esc(t('tip.colab.disconnect')) + '"')));
+  }
+
+  // 3 -- compute units: an A100 needs paid ones
+  const b = st.balance;
+  if (!colabReady()) {
+    h += gstep('todo', 'dashed', t('colab.step.cu'));
+  } else if (st.fake) {
+    h += gstep('done', 'okc', t('colab.step.cu'), t('colab.cu.rehearsal'));
+  } else if (!b || b.cu === null || b.cu === undefined) {
+    h += gstep('now busy', 'ring', t('colab.step.cu'), '…', '<p>' + esc(t('colab.cu.reading')) + '</p>');
+  } else if (b.cu <= 0) {
+    h += gstep('warn', 'alert', t('colab.step.cu'), t('colab.cu.ok', { cu: num(b.cu, 2) }),
+      '<p class="warn">' + esc(t('colab.cu.none')) + '</p>'
+      + row('<a href="https://colab.research.google.com/signup" target="_blank" rel="noopener noreferrer">'
+            + esc(t('colab.cu.plans')) + '</a>'));
+  } else {
+    h += gstep('done', 'okc', t('colab.step.cu'), t('colab.cu.ok', { cu: num(b.cu, 2) }));
+  }
+  h += '</ol>';
+  return h;
 }
 
 // ---- header ------------------------------------------------------------ //
@@ -1283,8 +1565,11 @@ function gpuHTML(g, locked) {
 
 function gpusHTML() {
   const s = st.stage;
-  const locked = BUSY.includes(s) || s === 'ready' || s === 'attached' || !!st.confirm || !!st.downing;
-  return (st.gpus || []).map((g) => gpuHTML(g, locked)).join('');
+  const locked = BUSY.includes(s) || s === 'ready' || s === 'attached' || !!st.confirm || !!st.downing
+    || !colabReady();
+  const need = colabReady() || s === 'ready' || s === 'attached' ? ''
+    : '<p class="fine">' + esc(t('gpus.need_colab')) + '</p>';
+  return need + (st.gpus || []).map((g) => gpuHTML(g, locked)).join('');
 }
 
 // ---- speed ------------------------------------------------------------------- //
@@ -1321,8 +1606,8 @@ function details(id, summary, body) {
 function connHTML() {
   const cli = st.cli || {}, bill = st.billing || {};
   const sessions = bill.sessions || [];
-  return '<div class="chips">' + chip('terminal', 'cli', cli.colab === 'missing' ? 'alert' : '') + chip('layers', 'wsl') + '</div>'
-    + (sessions.length ? '<ul class="list">' + sessions.map((x) => '<li>' + ico('cloud')
+  // where the CLI is and whom it is signed in as: the Colab guide at the top says it
+  return (sessions.length ? '<ul class="list">' + sessions.map((x) => '<li>' + ico('cloud')
         + '<span>' + esc((x.name || '?') + ' · ' + (x.hardware || '?')) + '</span>'
         + (x.ours ? '<span class="tag solid">' + esc(t('session.ours')) + '</span>' : '')
         + '<span class="mono">' + esc(x.endpoint || '') + '</span></li>').join('') + '</ul>' : '')
@@ -1410,11 +1695,10 @@ function bindValues() {
   tips.ttft = t('tip.ttft');
   tips.hit = t('tip.hit');
 
-  const cli = st.cli || {};
-  v.cli = t('cli.' + (cli.colab || 'unknown'), null, cli.colab);
-  tips.cli = t('tip.cli');
-  v.wsl = cli.wsl || '—';
-  tips.wsl = t('tip.wsl');
+  const c = colab(), step = colabStep();
+  v['sum-colab'] = step === 3 ? t('colab.sum.ok', { account: c.account || '—' })
+    : t('colab.sum.todo', { n: step + 1, step: t('colab.step.' + ['cli', 'account', 'cu'][step]) });
+  v.colablog = (c.log || []).join('\n');
   v.log = (st.log_tail || []).slice(-10).join('\n') || t('log.empty');
   v.foot = words(st.foot, '');
 
@@ -1424,7 +1708,7 @@ function bindValues() {
   const pre = m ? m.prefill : (fact(ref, 'prefill_tps') || {}).v, dec = m ? m.decode : (fact(ref, 'decode_tps') || {}).v;
   v['sum-speed'] = (pre == null && dec == null) ? '—'
     : t(m ? 'speed.live' : 'speed.ref') + ' · ' + num(pre, 0) + ' / ' + num(dec, 1) + ' t/s';
-  v['sum-conn'] = t('conn.sum', { cli: v.cli, n: v.billing });
+  v['sum-conn'] = t('conn.sum', { n: v.billing });
   v['sum-log'] = (st.log_tail || []).slice(-1)[0] || '';
 
   // Widths first, before anything below reads layout: a bar that was just drawn
@@ -1459,6 +1743,7 @@ function bindValues() {
 function render() {
   renderHeader();
   if (!st) return;
+  put('f-colab', foldHTML('colab', 'compass', t('sec.colab'), colabHTML, colabStep() < 3));
   put('s-status', statusHTML());
   put('f-gpus', foldHTML('gpus', 'cpu', t('sec.gpus'), gpusHTML));
   put('f-speed', foldHTML('speed', 'gauge', t('sec.speed'), speedHTML));
@@ -1585,8 +1870,20 @@ document.addEventListener('click', async (e) => {
   }
   if (pending) return;
   hideTip();
-  if (act === 'pick') say(await post('/control/select', { recipe: b.dataset.r }));
-  else if (act === 'go' && st && st.confirm) {
+  if (act.startsWith('colab-')) {
+    const what = act.slice('colab-'.length);
+    if (what === 'disconnect' && !confirm(t('colab.disconnect.confirm'))) return;
+    return say(await post('/control/colab/' + what, {}));
+  }
+  if (act === 'pick') {
+    const r = await post('/control/select', { recipe: b.dataset.r });
+    if (r && r.code === 'colab_setup') {     // the guide is where the next step is
+      folds.colab = true;
+      saveJSON('collabosm.folds', folds);
+      render();
+    }
+    say(r);
+  } else if (act === 'go' && st && st.confirm) {
     say(await post('/control/select', { recipe: st.confirm.recipe, confirm: true }));
   } else if (act === 'cancel') say(await post('/control/cancel', {}));
   else if (act === 'stop') say(await post('/control/stop', {}));

@@ -161,7 +161,7 @@ api_server.py on 127.0.0.1:8090  ->  cloudflared --url http://127.0.0.1:8090
 - No daemon, on purpose: a keep-alive that outlives the frontend is what turns a 2 h session into a
   24 h one. (The CLI's own daemon from `colab new` lives in WSL anyway, and WSL shuts its VM down
   seconds after the last `wsl.exe` exits, taking the daemon with it.) A box run by hand with no
-  frontend is reclaimed ~25 minutes after your last `colab exec`. Run `bash scripts/down.sh` when you
+  frontend is reclaimed ~25 minutes after your last `colab exec`. Run `python scripts/provision.py down` when you
   stop working, and check `colab sessions`.
 
 ## The frontend control plane (`frontend/control.py`)
@@ -169,8 +169,29 @@ api_server.py on 127.0.0.1:8090  ->  cloudflared --url http://127.0.0.1:8090
 The shell's right column is drawn from one object, and `control.py` is the real one. Facts that cost
 time to learn:
 
-- **The Colab CLI is Linux-only.** `uv tool install google-colab-cli` has no Windows build, so the
-  Windows frontend shells out: `wsl.exe -d Ubuntu -- bash -lc "<cd /mnt/e/... && up.sh>"`. Two things
+- **The `colab` command is Linux-only; the library is not.** `colab` imports its console, which needs
+  `termios`, so it dies on Windows -- but `pip install google-colab-cli` works there, and its auth,
+  client, session and contents modules import fine. The Colab guide (`frontend/colab_setup.py`) uses
+  that: install, sign-in (`scripts/colab_auth.py`), balance and keep-alive run with the CLI's own
+  interpreter, native or inside WSL. The first probe after WSL has idled took ~40 s (the VM
+  starting); a warm one takes ~1 s. The CLI's first run of a day took ~50 s too (its once-a-day
+  update check, and a token refresh); after that `colab sessions` answers in ~1 s.
+- **On Windows the `colab` command needs a stand-in, not a port.** `colab_cmd.py` puts empty
+  `termios` and `tty` modules in place when `termios` is missing -- both, because Windows' own `tty`
+  imports `termios` and dies on it -- and every command but `colab console` then works. Without a
+  sign-in the CLI asks for a pasted code; with no terminal it fails at once ("Aborted."), and the
+  frontend reads that as a dead sign-in: the stop that could not sign in says to connect again and
+  press Stop again, and the guide flips to Connect again.
+- **The sign-in is the CLI's, not ours.** Its OAuth client is an installed-app client registered for
+  `http://localhost`, so the frontend takes the loopback redirect instead of the CLI's paste-a-code
+  page (from WSL too: WSL2 forwards localhost to the Windows browser). google-auth refreshes against
+  Google's fixed endpoint whatever `token_uri` the file names, and `colab_auth.py` does the same for
+  tokeninfo and revoke: a token file must not be able to steer where its refresh token goes.
+- **Provisioning is Python, so it runs anywhere.** `scripts/provision.py` (up, down, fetch, sessions)
+  replaced `up.sh`, `down.sh` and `vm_fetch.sh`, which are one-line shims now; it runs with the CLI's
+  interpreter, natively or as `wsl.exe -d Ubuntu -- bash -lc "<python> /mnt/e/.../provision.py up ..."`
+  -- arguments, never environment, because nothing set on Windows crosses into WSL. The shell
+  version could not run on macOS either: `timeout` is GNU coreutils. Two things
   that bite: `wsl.exe` prints *its own* messages as UTF-16 (set `WSL_UTF8=1`, or every line looks like
   `N A M E`), and the path it needs is the WSL one (`E:\models\collabosm` -> `/mnt/e/models/collabosm`).
   All `.sh` files here are LF; a CRLF script fails in WSL with `\r` errors.
@@ -180,19 +201,19 @@ time to learn:
 - **The confirmation gate is the product.** `select()` without `confirm: true` returns
   `confirm_required` with CU/h, ETA and the cost of the load itself; a UI that skips the gate is a UI
   that spends CU on a mis-click.
-- **Stages only move forward.** `up.sh` relays `scripts/status.py` rows, and a relayed
+- **Stages only move forward.** `up` relays `scripts/status.py` rows, and a relayed
   `stage=probing` after `stage=loading` used to drag the rail backwards while the bar stayed at 60%.
-  `_set_stage()` now refuses to regress, and the bar has a time-based floor because `up.sh` sleeps
+  `_set_stage()` now refuses to regress, and the bar has a time-based floor because `up` sleeps
   45 s between polls.
 - **Two safety stops, both visible in the rail**: `--idle-stop-min` (default 20 min without chat
   traffic) and `--max-session-h` (default 6 h even with traffic). Chat traffic is anything the frontend
   proxies to `/v1/*`, so a long generation counts as activity.
-- **A failed job stops its box.** `up.sh` stops nothing on its way out, so a failure after `assign`
+- **A failed job stops its box.** `up` stops nothing on its way out, so a failure after `assign`
   (upload, bootstrap, `serve.sh`, the 50 min wait) used to leave a VM billing behind a ledger entry
   that said it had closed -- and the rail refused to stop a `failed` job. `_fail()` now runs
-  `down.sh` itself, and Stop stays available in `failed` as a manual retry.
+  `down` itself, and Stop stays available in `failed` as a manual retry.
 - **A session nobody closed.** If the frontend exits with a box up, the next one finds an open ledger
-  entry, says so, and offers Stop (it runs `down.sh` and closes the entry). The entry is billed up to
+  entry, says so, and offers Stop (it runs `down` and closes the entry). The entry is billed up to
   its last heartbeat plus 90 minutes -- conservative: Colab reclaimed an unattended box within 25, but
   its documented idle limit is ~90 -- not up to "now", so a restart days later does not charge a
   phantom month. New selections wait until it is closed.
@@ -202,7 +223,7 @@ time to learn:
   a live VM, and puts the record back from `list_assignments` (`colab_keepalive.py --no-ping`: nothing
   is assigned, nothing is kept alive) before it reads the VM's files. A `colab sessions` that did not
   answer at all is "unknown", never "no sessions".
-- **The rail offers exactly `recipes.json`.** A pick sends only the recipe id; `up.sh` resolves the
+- **The rail offers exactly `recipes.json`.** A pick sends only the recipe id; `up` resolves the
   card, the model and every flag from the same file, and the confirm card says when a recipe has not
   been run on its card yet or its rate is not one Colab reported.
 - **`up.sh` was never starting the model.** Nothing called `serve.sh`; the kit worked only because it
@@ -215,8 +236,8 @@ time to learn:
   drifted until the shell could not start it). `COLLABOSM_FAKE_FAIL=serve` rehearses a failure.
 - **Every POST must be same-origin JSON.** Omitting `Access-Control-Allow-Origin` stops a foreign page
   from reading answers, not from sending a `text/plain` POST -- and `/control/select` starts billing.
-  Both proxies (`frontend/server.py`, `collabosm.py ui`) refuse non-JSON POSTs, foreign `Origin`s and a
-  `Host` that is not this machine (DNS rebinding) before doing anything.
+  `frontend/server.py` refuses non-JSON POSTs, foreign `Origin`s and a `Host` that is not this machine
+  (DNS rebinding) before doing anything.
 - **A rehearsal must not touch the money ledger.** A fake run started without `--state-dir` wrote an
   *open session* into `~/.collabosm/ledger.json` and the rail then charged CU for a VM that never
   existed. Fake control planes now default to `.tmp/state-rehearsal/ledger.json`; only a real control
@@ -227,9 +248,10 @@ time to learn:
   serving that build). `shell.html` now unregisters service workers and drops caches on load; the stale
   prototype servers are gone. If a duplicate panel ever appears again, check the URL and the port
   first -- `http://127.0.0.1:<frontend-port>/` is the only current page.
-- **One window.** `python collabosm.py start` opens the frontend shell when something answers on
-  `--frontend-port` (default 3020) and only falls back to the older two-window chat/status pair when it
-  does not.
+- **One client.** The first local client -- `collabosm.py` with its own chat and status pages and a
+  proxy on 8790 -- was removed on 2026-09-26: the frontend had replaced every part of it (chat, the
+  column, and a `/v1` proxy on 3020 that Codex and Open WebUI use unchanged). An old install's
+  `update-ui` has nothing left to pull; point clients at `http://127.0.0.1:3020/v1` instead.
 
 ## Installing the CLI, and the one thing that breaks it
 

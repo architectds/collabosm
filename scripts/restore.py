@@ -173,14 +173,23 @@ def create_high_ram(state, SessionState, name, accelerator, shape_code):
     return res.endpoint, granted
 
 
+def colab_argv(exe=None):
+    """The Colab CLI: `exe` ($COLAB, --colab) when given, else the CLI itself through
+    colab_cmd.py under this interpreter -- the same package, and it also runs on
+    Windows, where the `colab` command dies on its Unix-only console."""
+    return [exe] if exe else [sys.executable, os.path.join(HERE, "colab_cmd.py")]
+
+
 def probe(colab, session, attempts=6):
     """Run scripts/probe_gpu.py on the VM and parse its one-line JSON answer."""
     probe_path = os.path.join(HERE, "probe_gpu.py")
     for i in range(1, attempts + 1):
         try:
-            out = subprocess.run([colab, "exec", "-s", session, "--timeout", "180",
-                                  "-f", probe_path],
-                                 capture_output=True, text=True, timeout=300).stdout
+            out = subprocess.run(colab + ["exec", "-s", session, "--timeout", "180",
+                                          "-f", probe_path],
+                                 capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=300,
+                                 stdin=subprocess.DEVNULL).stdout
         except Exception:
             out = ""
         for line in out.splitlines():
@@ -196,7 +205,8 @@ def probe(colab, session, attempts=6):
 
 
 def stop_session(colab, session):
-    subprocess.run([colab, "stop", "-s", session], capture_output=True, text=True, timeout=300)
+    subprocess.run(colab + ["stop", "-s", session], capture_output=True, text=True,
+                   encoding="utf-8", errors="replace", timeout=300, stdin=subprocess.DEVNULL)
 
 
 def main():
@@ -207,7 +217,8 @@ def main():
                     help="hm = HIGH_RAM (80 GB VRAM / 167 GB RAM), st = standard (40 GB)")
     ap.add_argument("--min-vram-gib", type=float, default=70.0,
                     help="refuse and stop the box below this (a 40 GB box measures ~39)")
-    ap.add_argument("--colab", default=os.environ.get("COLAB", "colab"))
+    ap.add_argument("--colab", default=os.environ.get("COLAB"),
+                    help="a Colab CLI executable (default: the CLI through colab_cmd.py)")
     ap.add_argument("--keepalive", action="store_true",
                     help="hold the VM open (bad on a metered plan)")
     ap.add_argument("--force-new", action="store_true",
@@ -217,6 +228,7 @@ def main():
     args = ap.parse_args()
 
     state, SessionState = _import_colab_cli()
+    colab = colab_argv(args.colab)
 
     try:
         live = list(state.client.list_assignments())
@@ -281,7 +293,7 @@ def main():
 
     # ---- 3. verify the box before it costs anything
     if not args.no_verify:
-        info = probe(args.colab, args.name)
+        info = probe(colab, args.name)
         if info is None:
             print("[restore] !! the VM did not answer the probe; the kernel may still be starting")
             result["probe"] = None
@@ -298,7 +310,7 @@ def main():
                 print("[restore]    cannot load it at all (Flash-Next: ~63.6 GiB of weights).")
                 if created or args.shape == "hm":
                     print("[restore]    stopping %s now, before any download; exit 6" % args.name)
-                    stop_session(args.colab, args.name)
+                    stop_session(colab, args.name)
                     result["stopped"] = True
                 print("[restore]    re-run this script to draw a new box; the lottery is real.")
                 if args.json:

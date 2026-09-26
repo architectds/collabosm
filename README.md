@@ -26,25 +26,30 @@ ExLlamaV3 is the only engine in this repo. See `docs/MEASURED.md` for provenance
 - A Colab plan that can allocate an **A100** (this kit was developed on a Pro tier with ~200 CU/month).
 - **HIGH_RAM** specifically. A 40 GB standard A100 **cannot load this model at all** — about 63.6 GiB
   of weights must be VRAM-resident. `scripts/restore.py` requests it explicitly and refuses a 40 GB box.
-- `uv tool install google-colab-cli` (and `gh` if you want to fork/push).
+- Python 3.12+ (or `uv`) and the Colab CLI, `google-colab-cli` -- the frontend's Colab guide installs
+  it; by hand, `uv tool install google-colab-cli`. Windows (with or without WSL), macOS and Linux all
+  work: everything that runs on your machine is Python (see [Where it runs](#where-it-runs)).
+  (`gh` too, if you want to fork/push.)
 - ~110 GiB of Colab disk for the weights.
 
 ## Quickstart
 
 ```bash
-bash scripts/up.sh                               # the default recipe: Flash-Next on an A100-80G
-RECIPE=a100-40g/qwen38-27b bash scripts/up.sh    # another card + model from recipes.json
-python3 scripts/recipe.py list                   # what the registry holds
-bash scripts/down.sh        # STOP THE VM. On a metered plan this is the most important command.
+python scripts/provision.py up                                # the default recipe: Flash-Next on an A100-80G
+python scripts/provision.py up --recipe a100-40g/qwen38-27b   # another card + model from recipes.json
+python scripts/recipe.py list                                 # what the registry holds
+python scripts/provision.py down   # STOP THE VM. On a metered plan this is the most important command.
 ```
 
-`up.sh` prints the tunnel URL when the endpoint answers `/health`. Point your client at
+Run them with the Colab CLI's interpreter (`~/.collabosm/colab-cli` when the frontend installed it,
+else `~/.local/share/uv/tools/google-colab-cli`); `bash scripts/up.sh` and `bash scripts/down.sh`
+still work and do exactly this. `up` prints the tunnel URL when the endpoint answers `/health`. Point your client at
 `<url>/v1` with the API key it prints (also at `/content/api-key.txt` on the VM).
 
 Everything a launch needs comes from the recipe; a variable you set yourself wins for that run:
 
 ```bash
-SESSION=mybox CACHE_SIZE=524288 CPU_CACHE_GB=8 bash scripts/up.sh
+SESSION=mybox CACHE_SIZE=524288 CPU_CACHE_GB=8 python scripts/provision.py up
 ```
 
 | variable | Flash-Next / A100-80G | meaning |
@@ -67,7 +72,7 @@ These settings have not yet been loaded together: the verified load in `docs/MEA
 `-gcs 4096 -ccs 16 -rcs 16`, without vision or YaRN. `GET /v1/status` reports what a running server
 actually got (`recipe`, `launch`, `context`, `vision`, `concurrency`).
 
-`up.sh` exits `0` on READY — a healthy API **and** a published tunnel URL — and otherwise with
+`up` exits `0` on READY — a healthy API **and** a published tunnel URL — and otherwise with
 `1` (upload/bootstrap), `2` (a recipe or argument that cannot run), `3`-`6` (from `restore.py`),
 `7` (timed out), `8` (`serve.sh` failed) or `9` (healthy on the VM, but no tunnel URL).
 
@@ -75,10 +80,10 @@ actually got (`recipe`, `launch`, `context`, `vision`, `concurrency`).
 
 `recipes.json` is the one list of what can run where: a recipe is a card (`gpus`), a model
 (`models`) and the launch settings for the pair. `scripts/recipe.py` resolves an id into the
-environment `up.sh` runs with: the card's shape and the VRAM a box must show before anything is
+environment `up` runs with: the card's shape and the VRAM a box must show before anything is
 downloaded (`restore.py`), the model's repo, pinned revision and directory (`bootstrap.sh`), and how
 it loads (`serve.sh` -> `api_server.py`). The frontend lists the same entries and sends only the id,
-so the rail and a hand-run `up.sh` cannot disagree. A new pairing is a new entry, not a new script.
+so the rail and a hand-run `up` cannot disagree. A new pairing is a new entry, not a new script.
 
 Every number carries its evidence, `{v, measured, src}`, and a recipe's `status` says how far it has
 been taken: `verified` (run on that card, numbers measured) or `unmeasured` (the launch path exists,
@@ -106,20 +111,22 @@ short prompts, the card warns). Quality past 262K is not measured yet.
 | path | role |
 |---|---|
 | `recipes.json` | **the recipe registry**: cards, models, and the launch settings for each pair, every number marked measured or not |
-| `scripts/recipe.py` | resolves a recipe id into the environment `up.sh` launches with (`list`, `show`, `env`, `vmenv`, `check`) |
+| `scripts/recipe.py` | resolves a recipe id into the environment `up` launches with (`list`, `show`, `env`, `vmenv`, `check`) |
 | `scripts/restore.py` | **the session restore script.** Re-attaches an orphaned VM from server truth, or creates one and actually requests the recipe's shape. Refuses/stops a box below the recipe's VRAM before spending anything. |
 | `scripts/colab_keepalive.py` | tells Colab the box is in use (the frontend calls it only while it is), and re-registers the CLI's session record when the CLI drops it |
 | `scripts/colab_ccu.py` | the account's real CU balance and burn rate, read from Colab |
-| `scripts/vm_fetch.sh` | one small file from the VM through the contents API (never `colab exec`) |
+| `scripts/colab_auth.py` | the CLI's own sign-in, for the frontend: `status`, `login` (loopback redirect), `logout` (revoke) |
 | `scripts/probe_gpu.py` | runs on the VM; reports VRAM/RAM/cc/disk as one JSON line |
-| `scripts/up.sh` | restore → upload → bootstrap → serve → wait for health |
-| `scripts/down.sh` | stop the VM and report what is still billing |
+| `scripts/provision.py` | **up** (restore → upload → bootstrap → serve → wait for health), **down** (stop the VM, report what still bills), **fetch** (one small file from the VM, never `colab exec`), **sessions** -- the same on Windows, macOS, Linux and WSL |
+| `scripts/colab_cmd.py` | the Colab CLI (`colab ...`) on any machine: on Windows it stands in for the two Unix-only modules its console imports |
+| `scripts/up.sh`, `scripts/down.sh` | one-line shims onto `provision.py up` / `down`, so the old commands keep working |
 | `scripts/bootstrap.sh` | runtime (pinned wheel) + weights (from HF at a pinned revision), idempotent |
 | `scripts/serve.sh` | launch the API + cloudflared tunnel (runs on the VM) |
 | `scripts/api_server.py` | minimal OpenAI-compatible server; **one long-lived Generator** |
 | `scripts/status.py` | one-glance stage/health report |
 | `scripts/dev_stub.py` | serves the real Handler on loopback with a stubbed engine: exercises the wire format with no GPU and no weights |
 | `scripts/check_surface.py` | drives a running server over HTTP and judges the surface (deltas, terminal event, ids, sequence numbers) |
+| `scripts/check_codex.py` | runs the real Codex CLI against `dev_stub.py --script` (manufactured model turns) and judges what Codex did with each tool-call syntax |
 | `manifest.json` | every pinned revision, size and measured number |
 | `docs/MEASURED.md` | the measurements, with provenance and caveats |
 | `docs/RUNBOOK.md` | the traps, the protocols, the cost guardrails |
@@ -216,6 +223,48 @@ env_key = "COLLABOSM_TEST_KEY"
 Add `--think` to `dev_stub.py` to exercise the reasoning item lifecycle. Both shapes were accepted
 by Codex CLI 0.144.6 (`codex exec --skip-git-repo-check 'Reply with exactly: pong'`).
 
+### Tool calls, end to end through Codex
+
+`dev_stub.py --script turns.json` plays a fixed list of model turns, one per generation: the exact
+text a model writes, tool-call XML included, and why it stopped (`stop_token` or `max_new_tokens`).
+`check_codex.py` uses that to put every call syntax the parser accepts through the real Codex CLI,
+and then checks what Codex did: the command it ran, the file a patch wrote, the history it sent
+back, and the prompt the model would be shown next.
+
+```bash
+python scripts/check_codex.py            # 15 scenarios, ~30 s, exits 1 on failure
+python scripts/check_codex.py --list     # what each one covers
+python scripts/check_codex.py patch cut --keep   # some of them; keep their files
+```
+
+| scenario | the model writes | what is checked |
+|---|---|---|
+| `xml` | one Qwen3-Coder XML call, sent in a single fragment | the command runs; the call and its output are replayed into the next prompt |
+| `typed` | `timeout_ms`, `login`, and a command `1234` | a number stays a number, a boolean stays a boolean, a string-only `1234` stays a string |
+| `verbatim` | a multi-line value with tags, quotes, `` ` ``, `$`, backslashes, unicode | the arguments and the file the command wrote match byte for byte |
+| `json-body` | `{"name": ..., "arguments": {...}}` inside `<tool_call>` | it runs like the XML form |
+| `no-close` | a call without `</tool_call>`, then one without `</function>` | both run |
+| `patch` | freeform `apply_patch`: add a file, then update it | Codex applies both; the file is exact; the call goes out as `custom_tool_call` |
+| `big-patch` | an 80-line patch, sent one character per fragment | the file is exact |
+| `plan` | `update_plan` with an array of objects | Codex shows it as its to-do list |
+| `namespace` | `close_agent` from Codex's `multi_agent_v1` group | the call goes back with its `namespace` and reaches the multi-agent handler |
+| `serial` / `parallel` | two calls in one turn | one runs when `parallel_tool_calls` is false, both run when it is true |
+| `cut` | a call the token ceiling cuts off mid-value | nothing runs; Codex takes `response.incomplete` as a failed attempt and asks again |
+| `think` | a think block, then a call | the reasoning item Codex replays is the thought exactly, and the model sees it again |
+| `image` | `view_image` on a PNG (fake vision tower) | the picture reaches the model inside the tool result |
+| `text-edges` | a plain answer full of `<`, with tools offered | the text arrives whole, with no call |
+
+Codex offers our model the freeform `apply_patch` tool only when a model catalog says so, so each
+scenario writes one (`model_catalog_json`) and a scratch `CODEX_HOME`. Approvals are off and there
+is no sandbox, so the only commands Codex runs are the scripted ones (`echo`, and writing files in a
+scratch directory). The pack's `chat_template.jinja` is fetched into `_dev_model/` from the pinned
+revision the first time.
+
+One ambiguity is inherent to the XML format, and llama-server has it too: a value ends at the first
+`</parameter>` that is followed by `<parameter=`, `</function>` or `</tool_call>`. A value that
+contains that exact sequence is cut short there. `</parameter>` followed by anything else stays part
+of the value, and `verbatim`, `patch` and `big-patch` check that.
+
 ## How many sessions fit
 
 Measured fit on this card (details and assumptions in `docs/CONCURRENCY.md`):
@@ -275,92 +324,12 @@ with `enable_thinking: true` or `reasoning_effort: xhigh|medium|low` (the pack's
 takes both); the trace is returned in `message.reasoning_content` and never leaks into
 `content`.
 
-## Client, and using a real WebUI
+## The frontend
 
-`collabosm.py` is the local client. Stdlib only, no install step:
-
-```bash
-python collabosm.py config --init --endpoint https://<host>.trycloudflare.com/v1 --api-key <key>
-python collabosm.py ui        # http://127.0.0.1:8790  (page + proxy)
-python collabosm.py chat "hello"          # same path, terminal
-python collabosm.py update-ui             # pull ui/ from this repo and cache it
-```
-
-It implements **exactly two dialects**, the two Codex uses: `/v1/responses` and
-`/v1/chat/completions` (plus `/v1/models`, which every OpenAI-compatible client probes first).
-Anything else returns a JSON 404 that says so.
-
-**Why a local proxy instead of pointing a client straight at the endpoint**
-
-- the bearer key stays in this process and is never handed to a browser,
-- the page is same-origin with the proxy, so there is no CORS surface at all,
-- the UI can be updated independently of the VM.
-
-There is deliberately **no** `Access-Control-Allow-Origin: *` here: a wildcard on a proxy that
-injects a bearer key would let any web page you happen to visit read what your GPU says. That alone
-does not stop a page from *sending* a `text/plain` or form POST, though — those need no preflight —
-so every POST must also be `application/json`, come from this origin (or from no browser at all), and
-name this proxy in `Host`, which shuts out DNS rebinding too. `frontend/server.py` applies the same
-rule to `/control/*`, where a POST can start billing. Server-side UIs are unaffected (they call
-upstream from their own backend); if a browser-hosted UI ever needs in, add an explicit origin
-allowlist, not a wildcard.
-
-### Two windows, named
-
-The client serves three pages, and the launcher opens the two that matter so it is
-obvious at a glance which is which:
-
-```bash
-python collabosm.py start       # start the client if needed, then open both windows
-python collabosm.py startup     # do the same at every login (Startup folder shortcut)
-python collabosm.py startup --remove
-```
-
-| page | title | what it is |
-|---|---|---|
-| `/` | `collabosm` | a landing page with both entries, for when you open it by hand |
-| `/chat` | `collabosm — chat` | conversations, streamed, thinking collapsed |
-| `/status` | `collabosm — status` | endpoint state, live generation, and measured prefill / decode / ttft |
-
-`start` is deliberately tolerant of an unconfigured or unreachable endpoint: the
-client comes up anyway so the status page can say *what* is missing. Bringing the
-A100 up or down stays with `scripts/up.sh` / `scripts/down.sh`; this client never
-spends money on its own.
-
-If you would rather chat in Open WebUI, point the chat window elsewhere and keep
-this dashboard:
-
-```bash
-python collabosm.py config --chat-url http://127.0.0.1:8080
-```
-
-### The metrics contract
-
-The OpenAI protocol has no field for prefill or decode throughput, so no off-the-shelf UI can show
-it. The client times the stream as it passes and derives it:
-
-- `prefill ~= prompt_tokens / time-to-first-token` (includes queueing and prefill)
-- `decode ≈ output_tokens / (total − time-to-first-token)`
-
-`GET /local/metrics` returns `{last, live, turns}`. Tokens come from the upstream's own `usage` when
-it sends one and are flagged `"estimated": true` otherwise; a non-streamed turn reports no rates at
-all, because without a first-token time there is no prefill/decode boundary to measure. A wrong
-number presented as a measurement is worse than no number.
-
-### Pointing an existing WebUI at it
-
-Any OpenAI-compatible client works; give it the proxy, not the VM:
-
-```
-base URL : http://127.0.0.1:8790/v1
-API key  : anything (the proxy injects the real one)
-model    : qwen3.8-flash-next-exl3
-```
-
-**This repo now ships its own frontend** -- and still does not *write* a chat app. `frontend/` is
-our shell (`shell.html`, `server.py`, `control.py`: the only files we own) wrapped around a
+**This repo ships its own frontend** -- the one local client -- and still does not *write* a chat
+app. `frontend/` is our shell (`shell.html`, `server.py`, `control.py`: the only files we own) wrapped around a
 llama.cpp Web UI vendored byte for byte -- our diff against upstream is zero. Everything lives in
-**one right-hand column** -- session, card/recipe picker, money, speed, connection, log -- and the
+**one right-hand column** -- the Colab guide, session, card/recipe picker, money, speed, connection, log -- and the
 WebUI sits in an iframe beside it; ⌘B / Ctrl+B collapses the column. The shell is colour-blocked
 against the WebUI -- warm charcoal by day beside its white page, bone paper by night beside its
 near-black one, switching when the WebUI's own theme does -- and speaks **English, 中文 and 日本語**
@@ -373,26 +342,106 @@ kit that can spend money, so it is also where the guardrails are:
 
 | what | how |
 |---|---|
-| cards | `select()` drives `scripts/up.sh` over WSL -- `google-colab-cli` has no Windows build |
+| Colab setup | the guide at the top of the column (`frontend/colab_setup.py`): no CLI, no sign-in, no compute units -- each with its button; Start is refused until it is done |
+| cards | `select()` runs `scripts/provision.py up` with the Colab CLI's interpreter -- natively, or inside WSL when the CLI is there |
 | money | a CU ledger in `~/.collabosm/ledger.json`; the column shows used / left against `--budget-cu` |
 | confirmation | a bare click returns `confirm_required` with CU/h, ETA and what the load itself costs; only `confirm: true` starts the job (and the billing); `/control/cancel` drops it |
-| stopping | Stop runs `scripts/down.sh`; **idle auto-stop** after `--idle-stop-min` (20) with no chat traffic, plus a `--max-session-h` (6) ceiling; a job that **fails** after `assign` is stopped too, and a session a previous frontend never closed can be stopped from the column |
+| stopping | Stop runs `provision.py down`; **idle auto-stop** after `--idle-stop-min` (20) with no chat traffic, plus a `--max-session-h` (6) ceiling; a job that **fails** after `assign` is stopped too, and a session a previous frontend never closed can be stopped from the column |
 | chat | once ready, `/v1/*` is proxied to the live tunnel with the VM key injected; when nothing is live the frontend answers **503** instead of pretending |
 | provisioning | always through `scripts/restore.py`, so an orphaned VM is adopted, never duplicated |
 
 Rehearse the whole flow with no card and no CU:
 
 ```bash
-python frontend/server.py --fake-provision   # real control plane, fake up.sh (~24 s), rehearsal ledger
+python frontend/server.py --fake-provision   # real control plane, fake provisioning (~24 s), rehearsal ledger
 python frontend/server.py --mock             # the same, with a ledger that is never written
 python scripts/dev_stub.py --port 8099 &     # optional: something to chat with while rehearsing
 python frontend/server.py --mock --backend http://127.0.0.1:8099
 COLLABOSM_FAKE_FAIL=serve python frontend/server.py --mock   # rehearse a failure + its auto-stop
 ```
 
-Both modes print the same log lines `up.sh` does (`[restore] box: ...`, `stage=weights`,
+Both modes print the same log lines `up` does (`[restore] box: ...`, `stage=weights`,
 the tunnel URL, `READY`), so the rail, the stages and the stop path are all exercised for free.
-Only the WSL call itself is replaced.
+Only the call to `provision.py` itself is replaced.
+
+### First run: the Colab guide
+
+A new user has no Colab CLI and no sign-in, so the column opens with a small guide -- expanded on
+the first launch, and folded or not after that as the user leaves it:
+
+| step | when it is not done yet |
+|---|---|
+| Colab CLI | **Install** puts `google-colab-cli==0.6.0` in a venv of its own (`~/.collabosm/colab-cli`); it needs Python 3.12+ or `uv`, and says so when neither is here |
+| Google account | **Connect Google account** opens Google's consent page in the browser; one Allow and the token is written where the CLI keeps it (`~/.config/colab-cli/token.json`) -- a CLI that is already signed in is simply found connected. A revoked or expired sign-in, or one without the Colab scope, asks to connect again |
+| compute units | the balance, read from Colab; none left says an A100 needs a paid plan |
+
+The sign-in is the CLI's own: `scripts/colab_auth.py` runs with the CLI's interpreter and uses its
+OAuth client, scopes and token file. The CLI asks for a code to be pasted back, because it must work
+without a browser; the frontend runs where the browser is, so it takes the loopback redirect the
+client is registered for (`http://localhost:<port>/`, PKCE), and nothing but Allow is asked of the
+user. Google's consent page shows Google's own SDK app -- that is the CLI's client -- asking for
+Colab, Drive (only files this app uses) and Cloud Platform.
+
+### Where it runs
+
+Everything that runs on your machine is Python, started with the Colab CLI's own interpreter:
+the sign-in (`colab_auth.py`), the balance, the keep-alive, and `provision.py` -- up, down, the VM's
+files, the session list. `provision.py` drives the Colab CLI itself, through `colab_cmd.py`. No step
+needs bash, WSL or GNU coreutils (macOS has no `timeout`, which the old `up.sh` leaned on); the
+scripts that run *on the VM* (`bootstrap.sh`, `serve.sh`) are the only shell left, and the VM is Linux.
+
+| machine | what the guide finds or installs | notes |
+|---|---|---|
+| Windows, no WSL | a native CLI in `~/.collabosm/colab-cli` | the `colab` command dies on its Unix-only console (`termios`); `colab_cmd.py` stands in for the two modules it imports, and every command this kit uses works |
+| Windows with WSL | the CLI inside WSL, if it is there | looked for without booting WSL (`wsl --list`); a missing distro, or no WSL at all, falls through to native |
+| macOS, Linux | a native CLI | Python 3.12+ from python.org, Homebrew or `uv`; the system `python3` of macOS is too old, and the guide says so |
+
+Where the CLI is looked for: inside WSL first when that distro exists (the setup this kit grew up
+on), then natively -- `$COLLABOSM_COLAB_PY`, `~/.collabosm/colab-cli`, a `uv tool install`, or the
+frontend's own Python. The files it uploads go to the VM with LF endings even when a Windows editor
+left CRLF in them.
+
+```bash
+COLLABOSM_FAKE_COLAB=missing python frontend/server.py --mock   # rehearse the guide from nothing
+COLLABOSM_FAKE_COLAB=expired python frontend/server.py --mock   # ... or from a dead sign-in
+COLLABOSM_COLAB_WSL=0 python frontend/server.py                 # walk a fresh machine's real path
+```
+
+### Pointing other clients at it
+
+Codex, Open WebUI, a script: give them the frontend, not the VM. It proxies `/v1/*` to whichever box
+is live, with the VM's key injected, and answers 503 while none is.
+
+```
+base URL : http://127.0.0.1:3020/v1
+API key  : anything (the frontend injects the real one)
+model    : qwen3.8-flash-next-exl3
+```
+
+Both dialects stream through it line by line -- `/v1/responses` and `/v1/chat/completions`, plus
+`/v1/models` -- and `check_surface.py` passes 13/13 through it; Codex runs through it unchanged.
+
+**Why a local proxy instead of pointing a client straight at the endpoint**
+
+- the bearer key stays in this process and is never handed to a browser,
+- the tunnel's hostname changes with every VM, and this address does not,
+- the page is same-origin with the proxy, so there is no CORS surface at all.
+
+There is deliberately **no** `Access-Control-Allow-Origin: *` here: a wildcard on a proxy that
+injects a bearer key would let any web page you happen to visit read what your GPU says. That alone
+does not stop a page from *sending* a `text/plain` or form POST, though -- those need no preflight --
+so every POST must also be `application/json`, come from this origin (or from no browser at all), and
+name this proxy in `Host`, which shuts out DNS rebinding too; `/control/*`, where a POST can start
+billing, is held to the same rule. Server-side clients are unaffected (they call from their own
+process); if a browser-hosted UI ever needs in, add an explicit origin allowlist, not a wildcard.
+
+### The metrics contract
+
+The OpenAI protocol has no field for prefill or decode throughput, so no off-the-shelf UI can show
+it. `api_server.py` sends llama.cpp's own `timings` on a stream's last chunk, and the frontend reads
+prefill and decode from there as the stream passes; without them it keeps only the time to the first
+token and derives no rate from characters. A wrong number presented as a measurement is worse than
+no number.
 
 Any other OpenAI-compatible client works too: `uv tool install open-webui`, then
 Settings -> Connections -> OpenAI API with the values above. That path is now **deprecated** -- it
