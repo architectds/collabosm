@@ -16,7 +16,7 @@ Measured on the box this repo was built against:
 | decode, no MTP | 56 t/s |
 | KV cache | 10,752 B/token (2.63 GiB at 262K, 5.01 GiB at 500K) |
 | resume a fully-evicted 32K conversation | **0.58 s** instead of a 9.72 s re-prefill (16.8x) |
-| cost | 7.52 CU/h (A100 High-RAM) ≈ $0.75/h, ≈26.6 h per 200 CU |
+| cost | 6.77 CU/h (A100 High-RAM, Colab's own rate for the box) ≈ $0.68/h, ≈29.5 h per 200 CU |
 
 ExLlamaV3 is the only engine in this repo. See `docs/MEASURED.md` for provenance and caveats, and
 `docs/CONCURRENCY.md` for how many sessions the card can actually hold.
@@ -32,43 +32,85 @@ ExLlamaV3 is the only engine in this repo. See `docs/MEASURED.md` for provenance
 ## Quickstart
 
 ```bash
-bash scripts/up.sh          # restore/create the box, install runtime, fetch weights, serve
+bash scripts/up.sh                               # the default recipe: Flash-Next on an A100-80G
+RECIPE=a100-40g/qwen38-27b bash scripts/up.sh    # another card + model from recipes.json
+python3 scripts/recipe.py list                   # what the registry holds
 bash scripts/down.sh        # STOP THE VM. On a metered plan this is the most important command.
 ```
 
 `up.sh` prints the tunnel URL when the endpoint answers `/health`. Point your client at
 `<url>/v1` with the API key it prints (also at `/content/api-key.txt` on the VM).
 
-Useful knobs, all via environment:
+Everything a launch needs comes from the recipe; a variable you set yourself wins for that run:
 
 ```bash
 SESSION=mybox CACHE_SIZE=524288 CPU_CACHE_GB=8 bash scripts/up.sh
 ```
 
-| variable | default | meaning |
+| variable | Flash-Next / A100-80G | meaning |
 |---|---|---|
-| `SESSION` | `collabosm` | local session name |
+| `SESSION` | `collabosm` | local session name (not part of a recipe) |
 | `CACHE_SIZE` | `500224` | total KV tokens across all jobs (multiple of 256) |
 | `CACHE_QUANT` | `4` | KV bits (`4` = Q4, `2`-`8` allowed) |
 | `CPU_CACHE_GB` | `32` | **pinned-RAM second-tier KV page cache** (0 = off). Sized at 92K tokens/GB; do not treat it as free - it is allocated as pinned memory in full (32 + 24 = ~56 GB next to a 36.4 GiB n-gram table) |
 | `RECURRENT_CACHE_GB` | `24` | host-RAM store for Gated-DeltaNet checkpoints (~2048-token interval, 116 MB each) |
 | `GCS` | `8192` | generator chunk size — the biggest prefill lever we found |
 | `NDT` | `4` | MTP draft depth |
+| `VISION` | `1` | load the pack's vision tower (image input) |
+| `EXL3_VISION_PINNED` | `1` | keep the tower's weights in pinned host RAM instead of VRAM (an ExLlamaV3 switch) |
+| `YARN_FACTOR` | `2` | YaRN over the native 262,144 positions (0 = native only); see below |
+| `CONCURRENCY` | `1` | reported; requests are still served one at a time |
 | `RUNTIME` | `wheel` | `wheel` (prebuilt, no compile) or `source` |
 | `TUNNEL_TOKEN` | unset | named-tunnel token: gives a **stable hostname** instead of a quick tunnel. Pair with `PUBLIC_URL` for the URL shown in status |
 
-These defaults have not yet been loaded together: the verified load in `docs/MEASURED.md` ran
-`-gcs 4096 -ccs 16 -rcs 16`. `GET /v1/status` reports what a running server actually got.
+These settings have not yet been loaded together: the verified load in `docs/MEASURED.md` ran
+`-gcs 4096 -ccs 16 -rcs 16`, without vision or YaRN. `GET /v1/status` reports what a running server
+actually got (`recipe`, `launch`, `context`, `vision`, `concurrency`).
 
 `up.sh` exits `0` on READY — a healthy API **and** a published tunnel URL — and otherwise with
-`1` (upload/bootstrap), `2`-`6` (from `restore.py`), `7` (timed out), `8` (`serve.sh` failed) or
-`9` (healthy on the VM, but no tunnel URL).
+`1` (upload/bootstrap), `2` (a recipe or argument that cannot run), `3`-`6` (from `restore.py`),
+`7` (timed out), `8` (`serve.sh` failed) or `9` (healthy on the VM, but no tunnel URL).
+
+## Recipes
+
+`recipes.json` is the one list of what can run where: a recipe is a card (`gpus`), a model
+(`models`) and the launch settings for the pair. `scripts/recipe.py` resolves an id into the
+environment `up.sh` runs with: the card's shape and the VRAM a box must show before anything is
+downloaded (`restore.py`), the model's repo, pinned revision and directory (`bootstrap.sh`), and how
+it loads (`serve.sh` -> `api_server.py`). The frontend lists the same entries and sends only the id,
+so the rail and a hand-run `up.sh` cannot disagree. A new pairing is a new entry, not a new script.
+
+Every number carries its evidence, `{v, measured, src}`, and a recipe's `status` says how far it has
+been taken: `verified` (run on that card, numbers measured) or `unmeasured` (the launch path exists,
+the numbers are estimates). Only recipes expected to run are listed; a pair that cannot fit is not.
+
+| recipe | card | model | status | notes |
+|---|---|---|---|---|
+| `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
+| `a100-40g/qwen38-27b` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 3.50 bpw, 15.4 GB | unmeasured | 262K native, vision, no n-gram table; ~22 GiB of 39 estimated |
+
+The 40 GB card is requested by sending no shape at all (Colab's default is the standard 40 GB shape
+in every draw we logged); `shape=hm` is sent only for High-RAM.
+
+**YaRN, and the ExLlamaV3 trap.** Both packs are 262,144 positions natively. The model cards extend
+them by rewriting `text_config.rope_parameters` to `rope_type: "yarn"` with a `factor` over
+`original_max_position_embeddings: 262144`. ExLlamaV3, however, ignores `factor` whenever
+`original_max_position_embeddings` is present and derives it as `max_position_embeddings / original`
+-- so the card's block alone is factor 1.0, a silent no-op. `api_server.py` (`apply_yarn`) therefore
+also raises `max_position_embeddings` to `262144 x factor`, keeps the pack's own file as
+`config.json.orig`, and puts it back when a recipe asks for no YaRN (static YaRN costs a little on
+short prompts, the card warns). Quality past 262K is not measured yet.
 
 ## What is in here
 
 | path | role |
 |---|---|
-| `scripts/restore.py` | **the session restore script.** Re-attaches an orphaned VM from server truth, or creates one and actually requests the HIGH_RAM shape. Refuses/stops a 40 GB box before spending anything. |
+| `recipes.json` | **the recipe registry**: cards, models, and the launch settings for each pair, every number marked measured or not |
+| `scripts/recipe.py` | resolves a recipe id into the environment `up.sh` launches with (`list`, `show`, `env`, `vmenv`, `check`) |
+| `scripts/restore.py` | **the session restore script.** Re-attaches an orphaned VM from server truth, or creates one and actually requests the recipe's shape. Refuses/stops a box below the recipe's VRAM before spending anything. |
+| `scripts/colab_keepalive.py` | tells Colab the box is in use (the frontend calls it only while it is), and re-registers the CLI's session record when the CLI drops it |
+| `scripts/colab_ccu.py` | the account's real CU balance and burn rate, read from Colab |
+| `scripts/vm_fetch.sh` | one small file from the VM through the contents API (never `colab exec`) |
 | `scripts/probe_gpu.py` | runs on the VM; reports VRAM/RAM/cc/disk as one JSON line |
 | `scripts/up.sh` | restore → upload → bootstrap → serve → wait for health |
 | `scripts/down.sh` | stop the VM and report what is still billing |
@@ -132,7 +174,12 @@ Known gaps, stated plainly:
   one-shot path survives as `_generate_blocking()` and is used only if a build's Job API differs.
 - **Requests are serialised** by a lock — one Generator, one cache. "Multiple streams" today means
   queued, not parallel.
-- **`max_batch_size > 1` is untested.** Every measurement ran `num_slots = 1`.
+- **`max_batch_size > 1` is untested.** Every measurement ran `num_slots = 1`. ExLlamaV3 itself batches
+  (continuous batching in `Generator`), but it allocates recurrent-state slots at load from `-ambs`
+  (default 1), and `enqueue`/`iterate`/`cancel` are not thread-safe: real concurrency needs `-ambs N`
+  plus one engine thread that owns the Generator, and then a measurement on the card.
+- **Vision and YaRN are configured, not measured.** The 80G recipe loads the vision tower (weights in
+  pinned host RAM) and YaRN x2; neither has run on the card together with the 500K cache yet.
 - Session *assignment* is scripted; it is not yet a configurable hosting layer.
 
 ## Testing it without a GPU
@@ -403,10 +450,13 @@ service, and "open whatever path the caller sent" would be a local file read. So
 - an image that cannot be embedded is a **400** (`type: vision_unavailable`), never a silent
   text-only answer.
 
-**Why `VISION=1` is not the default yet:** this box already sits at 76.4 / 81.9 GiB, and the tower's
-VRAM cost has not been measured here. Flip it on a real load, watch the number, then make it the
-default in `serve.sh`. `GET /v1/status` says which state a running server is in, so a client (or
-ModelDock's `supportsVision`) can stop guessing.
+**Vision is on in both recipes, and still unmeasured.** The 80G box already sits at 76.4 / 81.9 GiB
+at a 500K cache, so its recipe also sets `EXL3_VISION_PINNED=1`: ExLlamaV3 then keeps the tower's
+linear weights in pinned host RAM instead of VRAM (the card has ~70 GB of host RAM to spare), which
+costs a PCIe copy per image and no resident VRAM. The 27B pack carries its tower (bf16) inside its
+shards and fits it in VRAM easily. Neither has been loaded on its card yet -- watch the number on the
+first real load. `GET /v1/status` says which state a running server is in, so a client (or ModelDock's
+`supportsVision`, or the frontend's WebUI through `/props`) can stop guessing.
 
 Verify either way -- the tool accepts both outcomes, because a server without vision must refuse:
 

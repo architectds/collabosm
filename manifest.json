@@ -9,9 +9,11 @@
     "vram_GiB": 79.3,
     "ram_GiB": 167,
     "cpus": 12,
-    "cu_per_hour": 7.52,
+    "cu_per_hour": 6.77,
+    "cu_per_hour_source": "Colab /tun/m/ccu-info consumptionRateHourly, box as the only assignment, 2026-09-25 (earlier notes: 7.52)",
     "note": "mts: the HIGH_RAM shape is NOT what `colab new --gpu A100` returns. See scripts/restore.py."
   },
+  "recipes": "recipes.json (resolved by scripts/recipe.py; RECIPE=<id> bash scripts/up.sh)",
   "model": {
     "repo": "turboderp/Qwen3.8-Flash-Next-exl3",
     "revision": "4.05bpw_h6_ng6",

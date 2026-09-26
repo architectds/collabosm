@@ -160,6 +160,17 @@ Two facts about the served model that cost real time to find:
   `completion_only=True`. This is the same class of bug as the per-request `Generator`: invisible,
   and it does not raise.
 
+## What Colab charges, and what it counts as use (2026-09-25/26)
+
+| item | value | source |
+|---|---|---|
+| A100-80G High-RAM rate | **6.77 CU/h** | `/tun/m/ccu-info` `consumptionRateHourly` with this box as the account's only assignment (older notes: 7.52) |
+| unattended box reclaimed | **within 25 min** of the last `colab exec` | CLI history: last exec 02:35:37 UTC, assignment list empty at 03:00:05; the service was up and nothing sent a keep-alive |
+| shape sent for a 40 GB card | none | 13 unpatched `assign` calls in `colab.log` came back `machineShape 0`; `shape=st` has never been sent |
+
+Chat through the tunnel does not count as use; the kernel and the keep-alive ping do. That is why
+the frontend keeps a box alive while it is in use (`docs/RUNBOOK.md`, cost guardrails).
+
 ## Capacity
 
 The fitted VRAM line, the per-slot recurrent cost, the session table and the reasons the host-RAM
