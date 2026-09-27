@@ -199,7 +199,7 @@ time to learn:
   -- arguments, never environment, because nothing set on Windows crosses into WSL. The shell
   version could not run on macOS either: `timeout` is GNU coreutils. Two things
   that bite: `wsl.exe` prints *its own* messages as UTF-16 (set `WSL_UTF8=1`, or every line looks like
-  `N A M E`), and the path it needs is the WSL one (`E:\models\collabosm` -> `/mnt/e/models/collabosm`).
+  `N A M E`), and the path it needs is the WSL one (`D:\work\collabosm` -> `/mnt/d/work/collabosm`).
   All `.sh` files here are LF; a CRLF script fails in WSL with `\r` errors.
 - **Billing starts at the click, not at the load.** The ledger opens its record when the job is
   spawned (that is when `assign` happens), and closes it on `down`, failure or the safety stops. A

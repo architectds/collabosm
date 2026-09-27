@@ -18,11 +18,12 @@ open beside it.
 
 ## Install (E: drive, no C: growth)
 
-C: was down to ~29 GB free, so every byte goes to E:. The uv tool environment, the binary and the
-package cache all move; only the Python 3.11 interpreter is reused from where uv already had it.
+When C: is short of space, every byte can go to another drive (E: here). The uv tool environment,
+the binary and the package cache all move; only the Python 3.11 interpreter is reused from where uv
+already has it.
 
 ```powershell
-$uv = 'C:\path\to\uv.exe'
+$uv = (Get-Command uv).Source          # or the full path to uv.exe, if it is not on PATH
 New-Item -ItemType Directory -Force -Path E:\open-webui, E:\uv-cache | Out-Null
 $env:UV_TOOL_DIR      = 'E:\open-webui\tools'
 $env:UV_TOOL_BIN_DIR  = 'E:\open-webui\bin'
