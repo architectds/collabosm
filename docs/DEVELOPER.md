@@ -67,8 +67,8 @@ SESSION=mybox CACHE_SIZE=524288 CPU_CACHE_GB=8 python scripts/provision.py up
 | `VISION` | `1` | load the pack's vision tower (image input) |
 | `EXL3_VISION_PINNED` | `1` | keep the tower's weights in pinned host RAM instead of VRAM (an ExLlamaV3 switch) |
 | `YARN_FACTOR` | `2` | YaRN over the native 262,144 positions (0 = native only); see below |
-| `CONCURRENCY` | `1` | reported; requests are still served one at a time |
-| `WARMUP` | `1` | one throwaway full-chunk prefill and a few decoded tokens before the port opens, so the first request does not pay the kernel autotune (`-gcs 8192` measured 1,674 t/s on its first run, 3,882 on its second); `0` skips it |
+| `CONCURRENCY` | `1` | requests decoded together, one engine step for all of them; above 1 it becomes `-ambs N`, one recurrent state slot per request (~0.5-0.7 GiB of VRAM each), and a request past N waits its turn. The 27B recipe runs `2` |
+| `WARMUP` | `1` | one throwaway full-chunk prefill and a few decoded tokens before the port opens, so the first request does not pay the kernel autotune (`-gcs 8192` measured 1,674 t/s on its first run, 3,882 on its second), plus `CONCURRENCY` short streams side by side for the batched decode; `0` skips it |
 | `RUNTIME` | `wheel` | `wheel` (prebuilt, no compile) or `source` |
 | `TUNNEL_TOKEN` | unset | named-tunnel token: gives a **stable hostname** instead of a quick tunnel. Pair with `PUBLIC_URL` for the URL shown in status |
 
@@ -96,7 +96,7 @@ the numbers are estimates). Only recipes expected to run are listed; a pair that
 | recipe | card | model | status | notes |
 |---|---|---|---|---|
 | `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
-| `a100-40g/qwen38-27b` (**default**) | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured (speeds measured with Q8 KV, `docs/MEASURED.md`) | two 409,600-token conversations (YaRN 1.5625, cache 819,200), Q4 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~32 GiB of 39 estimated |
+| `a100-40g/qwen38-27b` (**default**) | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured (speeds measured with Q8 KV, `docs/MEASURED.md`) | two 409,600-token conversations decoding together (YaRN 1.5625, cache 819,200, `CONCURRENCY 2`), Q4 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~33 GiB of 39 estimated |
 
 The 40 GB card is requested by sending no shape at all (Colab's default is the standard 40 GB shape
 in every draw we logged); `shape=hm` is sent only for High-RAM.
@@ -185,12 +185,20 @@ Known gaps, stated plainly:
   the model is still working. Verified locally through a real Codex CLI client: first delta at
   0.01 s, 11 deltas, terminal `response.completed` present, `sequence_number` monotonic. The old
   one-shot path survives as `_generate_blocking()` and is used only if a build's Job API differs.
-- **Requests are serialised** by a lock — one Generator, one cache. "Multiple streams" today means
-  queued, not parallel.
-- **`max_batch_size > 1` is untested.** Every measurement ran `num_slots = 1`. ExLlamaV3 itself batches
-  (continuous batching in `Generator`), but it allocates recurrent-state slots at load from `-ambs`
-  (default 1), and `enqueue`/`iterate`/`cancel` are not thread-safe: real concurrency needs `-ambs N`
-  plus one engine thread that owns the Generator, and then a measurement on the card.
+- **Requests run side by side, up to `CONCURRENCY`.** ExLlamaV3's `Generator` batches continuously,
+  but its `enqueue`/`iterate`/`cancel` are not thread-safe, so one thread (`Conductor` in
+  `api_server.py`) owns it: request threads hand it their jobs and read their own results back, and
+  one step decodes every live job. A recurrent model gets its state slots from `-ambs N` (model_init's
+  default of 1 would hold it to one job) and the Generator's batch is capped at the same N for every
+  model. Request N+1 waits in the engine's queue, and its wait is reported as `timings.queue_ms`, not
+  as a slow prefill. A client that goes away is cancelled at the next step boundary. The vision tower
+  runs on the same thread between steps; the old blocking fallback runs there only once nothing is
+  live, and whatever arrives after it waits behind it.
+- **Two at once has not run on a card yet.** The 27B recipe asks for `CONCURRENCY 2`: a second state
+  slot of 728 MiB at `ndt 4`, and 2 x 409,600 positions in the 819,200-token cache. Every measurement
+  so far ran one slot. What is verified is the scheduling, GPU-less, against a fake engine shaped like
+  ExLlamaV3's (two decoding together, a third queued, one job failing alone, a whole step failing,
+  a client dropping mid-stream).
 - **Vision and YaRN are configured, not measured.** The 80G recipe loads the vision tower (weights in
   pinned host RAM) and YaRN x2; neither has run on the card together with the 500K cache yet.
 - Session *assignment* is scripted; it is not yet a configurable hosting layer.
@@ -498,7 +506,9 @@ The OpenAI protocol has no field for prefill or decode throughput, so no off-the
 it. `api_server.py` sends llama.cpp's own `timings` on a stream's last chunk, and the frontend reads
 prefill and decode from there as the stream passes; without them it keeps only the time to the first
 token and derives no rate from characters. A wrong number presented as a measurement is worse than
-no number.
+no number. The rates come from the engine's own clock for each job -- prefill up to its first token,
+decode after it -- so a wait for a free batch slot is reported apart, as `queue_ms`, and never makes
+a prefill look slow.
 
 Any other OpenAI-compatible client works too: `uv tool install open-webui`, then
 Settings -> Connections -> OpenAI API with the values above. That path is now **deprecated** -- it

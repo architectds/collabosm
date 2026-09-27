@@ -15,9 +15,12 @@ Two details that are easy to get wrong and are load-bearing here:
 1. ONE long-lived Generator. The PageTable and the CPU page cache are constructed
    inside Generator.__init__, so a Generator per request silently throws away prompt
    caching and the warm KV tier. This process builds exactly one and keeps it.
-2. Requests are serialised. One Generator owns one cache of `cache_size` tokens, and
-   `max_num_tokens` is the budget across concurrent jobs, so the lock is not a
-   limitation of the server, it is the shape of the engine.
+2. ONE thread drives it (Conductor). The Generator batches continuously, but its
+   enqueue/iterate/cancel take no locks, so request threads hand their jobs to that
+   thread and read their own results back. CONCURRENCY is how many jobs share a
+   step: the Generator's batch, and for a recurrent model its state slots (`-ambs`).
+   A request past that waits in the engine's queue, in order, and `max_num_tokens`
+   is the KV budget across every live job.
 
 Surface: GET /health, GET /v1/models, POST /v1/chat/completions (stream and
 non-stream). That is all on purpose -- this is how you point a client at the
@@ -31,6 +34,7 @@ import io
 import ipaddress
 import json
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -69,9 +73,12 @@ try:
 except Exception:
     JTemplate = None
 
-LOCK = threading.Lock()
 GEN = None
+CONDUCTOR = None        # the one thread that calls into GEN -- see conductor()
 TOK = None
+# exllamav3's encode() sets the shared HF tokenizer's encode_special_tokens flag and
+# then reads it: two requests tokenizing at once could swap an image request's mode
+TOK_LOCK = threading.Lock()
 ARGS = None
 STOP_IDS = []
 SERVER_STARTED = 0
@@ -117,9 +124,10 @@ RECIPE = os.environ.get("RECIPE") or None
 # YaRN over the native window, the way the model card documents it (see apply_yarn).
 # 0 = native context only.
 YARN_FACTOR = float(os.environ.get("YARN_FACTOR", 0) or 0)
-# Requests are serialised (module docstring, point 2). A recipe that asks for more
-# is reported as asked-for and not honoured, rather than silently dropped.
-CONCURRENCY = int(os.environ.get("CONCURRENCY", 1) or 1)
+# How many requests decode together (module docstring, point 2). Each one past the
+# first costs a recurrent state slot of VRAM (docs/CONCURRENCY.md), so it is the
+# recipe's to set; the ones beyond it wait their turn in the engine's queue.
+CONCURRENCY = max(1, int(os.environ.get("CONCURRENCY", 1) or 1))
 
 # What the server was launched with, for the read-only status contract.
 LAUNCH = {}
@@ -341,6 +349,7 @@ def engine_argv(env, model_dir):
     ngram_on = (os.path.exists(os.path.join(model_dir, "ngram_embedding.safetensors"))
                 if ngram == "auto" else _on(ngram))
     mtp_on = _on(env.get("MTP"), default=True)
+    conc = max(1, int(env.get("CONCURRENCY", 1) or 1))
     argv = ["serve", "-m", model_dir,
             "-cs", str(env.get("CACHE_SIZE", 262144)),
             "-cq", str(env.get("CACHE_QUANT", "4"))]
@@ -353,6 +362,10 @@ def engine_argv(env, model_dir):
         argv += ["-ccs", str(ccs)]        # pinned-RAM second-tier KV page cache
     if rcs:
         argv += ["-rcs", str(rcs)]        # GDN checkpoint store (host RAM)
+    if conc > 1:
+        # the Cache allocates a recurrent model's state slots from this, one per live
+        # job; model_init's default of 1 holds the engine to one job whatever else says
+        argv += ["-ambs", str(conc)]
     return argv, {
         "cache_size": int(env.get("CACHE_SIZE", 262144)),
         "cache_quant": str(env.get("CACHE_QUANT", "4")),
@@ -363,6 +376,7 @@ def engine_argv(env, model_dir):
         "mode": env.get("CHAT_MODE", "chatml"),
         "mtp": mtp_on,
         "ngram": ngram_on,
+        "concurrency": conc,
     }
 
 
@@ -436,9 +450,6 @@ def build_engine():
 
     ROPE.update(apply_yarn(MODEL_DIR, YARN_FACTOR))
     print("[api] rope: %s" % ROPE, flush=True)
-    if CONCURRENCY > 1:
-        print("[api] CONCURRENCY=%d asked for, but requests are serialised: serving 1 at a "
-              "time" % CONCURRENCY, flush=True)
     argv, launch = engine_argv(os.environ, MODEL_DIR)
     sys.argv = argv
     ARGS = parser.parse_args()
@@ -446,8 +457,7 @@ def build_engine():
     ccs, rcs = launch["cpu_cache_gb"], launch["recurrent_cache_gb"]
     LAUNCH.update(launch)
     LAUNCH.update({"recipe": RECIPE, "model": MODEL_ID, "vision": VISION_WANTED,
-                   "yarn_factor": YARN_FACTOR if ROPE.get("yarn") else 0,
-                   "concurrency": 1, "concurrency_requested": CONCURRENCY})
+                   "yarn_factor": YARN_FACTOR if ROPE.get("yarn") else 0})
 
     t0 = time.time()
     loaded = model_init.init(ARGS)
@@ -456,10 +466,13 @@ def build_engine():
     print("[api] model loaded in %.1fs, cache=%d tokens, draft=%s"
           % (time.time() - t0, cache.max_num_tokens, draft_model is not None), flush=True)
 
-    # ONE Generator for the process lifetime -- see the module docstring.
+    # ONE Generator for the process lifetime -- see the module docstring. Its batch is
+    # the recipe's CONCURRENCY for every model: its own default is 256, and only a
+    # recurrent model is held down by its state slots.
     GEN = Generator(model=model, cache=cache, tokenizer=tokenizer,
                     draft_model=draft_model, draft_cache=draft_cache,
                     max_chunk_size=gcs,
+                    max_batch_size=CONCURRENCY,
                     cpu_cache_size=int(ccs * 1024 ** 3),
                     recurrent_cache_size=int(rcs * 1024 ** 3))
     TOK = tokenizer
@@ -467,6 +480,12 @@ def build_engine():
     print("[api] stop ids: %s" % STOP_IDS, flush=True)
     print("[api] generator ready (cpu tier: %s)"
           % (getattr(GEN, "cpu_page_cache", None) is not None), flush=True)
+    LAUNCH["concurrency"] = int(getattr(GEN, "max_batch_size", 1) or 1)
+    print("[api] concurrency: %d job(s) per step%s" % (
+        LAUNCH["concurrency"], "" if LAUNCH["concurrency"] >= CONCURRENCY else
+        " (CONCURRENCY=%d asked for; the cache has fewer state slots)" % CONCURRENCY),
+        flush=True)
+    conductor()
 
     global VISION, VISION_ERR
     prep = os.path.join(MODEL_DIR, "preprocessor_config.json")
@@ -587,14 +606,17 @@ def _image_embedding(ref):
         raise MMUnavailable("image input needs Pillow in the runtime: %r" % exc)
     raw = payload if kind == "data" else _fetch_image(payload)
     img = Image.open(io.BytesIO(raw)).convert("RGB")
-    # The tower runs on the same GPU, with the same tokenizer, as generation: under
-    # the engine lock, not beside another request's decode (VRAM at these cache
-    # sizes has no room for the two at once)
-    with LOCK:
+    # The tower runs on the same GPU, with the same tokenizer, as generation: on the
+    # conductor's thread between two engine steps, never beside one (VRAM at these
+    # cache sizes has no room for the two at once, and neither is thread-safe)
+
+    def encode():
         try:
-            ie = VISION.get_image_embeddings(tokenizer=TOK, image=img)
+            return VISION.get_image_embeddings(tokenizer=TOK, image=img)
         except TypeError:
-            ie = VISION.get_image_embeddings(TOK, img)
+            return VISION.get_image_embeddings(TOK, img)
+
+    ie = conductor().run(encode)
     alias = getattr(ie, "text_alias", None)
     if not alias:
         raise MMUnavailable("the vision model returned no prompt alias for this image")
@@ -703,13 +725,13 @@ def render_chat(messages, template_kwargs=None, tools=None):
     return "".join(parts), "chatml"
 
 
-LAST = {}
-
 # What the server has been asked to do, for the frontend's idle auto-stop: a client
 # talking to the tunnel directly (Codex, ModelDock) is activity too, and only this
 # process sees it. Generation requests only -- health and status polls are not use.
 ACTIVITY = {"requests": 0, "last_request_at": None, "in_flight": 0}
 ACTIVITY_LOCK = threading.Lock()
+# The last finished request's timings (the rail's speed for clients it cannot see),
+# replaced whole under ACTIVITY_LOCK: two requests can finish at once.
 LAST_TIMINGS = {}
 
 
@@ -771,54 +793,231 @@ def machine():
 def _timings(r, t_start, t_first, t_end):
     """llama.cpp's `timings` block -- the WebUI already knows how to show it.
 
-    prompt_ms runs from the request to the first decoded fragment, so it includes
-    queueing behind the lock and prefill; predicted_ms runs from there to the end.
-    prompt_n excludes the cached prefix, as llama.cpp counts it.
+    The engine clocks every job, and its clock is used when the result carries it:
+    prompt_ms is the job's own prefill, up to its first token, predicted_ms its
+    decode, and a wait for a free batch slot is queue_ms (an extra key; llama.cpp's
+    readers ignore it) rather than a prefill that looks slow. Without that clock (an
+    older build, the dev stub) the wall stands in: prompt_ms runs from the request
+    to the first decoded fragment, wait included, and predicted_ms from there to
+    the end. prompt_n excludes the cached prefix, as llama.cpp counts it.
     """
     cached = int(r.get("cached_tokens") or 0)
     prompt_n = max(0, int(r.get("prompt_tokens") or 0) - cached)
     new = int(r.get("new_tokens") or 0)
-    prompt_ms = max(0.0, (t_first - t_start) * 1000.0)
-    predicted_ms = max(0.0, (t_end - t_first) * 1000.0)
-    return {"cache_n": cached,
-            "prompt_n": prompt_n, "prompt_ms": round(prompt_ms, 1),
-            "prompt_per_second": (round(prompt_n / prompt_ms * 1000.0, 1)
-                                  if prompt_n and prompt_ms else None),
-            "predicted_n": new, "predicted_ms": round(predicted_ms, 1),
-            "predicted_per_second": (round(new / predicted_ms * 1000.0, 1)
-                                     if new and predicted_ms else None)}
+    engine = r.get("time_prefill") is not None and r.get("time_generate") is not None
+    if engine:
+        prompt_ms = max(0.0, float(r["time_prefill"]) * 1000.0)
+        predicted_ms = max(0.0, float(r["time_generate"]) * 1000.0)
+    else:
+        prompt_ms = max(0.0, (t_first - t_start) * 1000.0)
+        predicted_ms = max(0.0, (t_end - t_first) * 1000.0)
+    out = {"cache_n": cached,
+           "prompt_n": prompt_n, "prompt_ms": round(prompt_ms, 1),
+           "prompt_per_second": (round(prompt_n / prompt_ms * 1000.0, 1)
+                                 if prompt_n and prompt_ms else None),
+           "predicted_n": new, "predicted_ms": round(predicted_ms, 1),
+           "predicted_per_second": (round(new / predicted_ms * 1000.0, 1)
+                                    if new and predicted_ms else None)}
+    if engine and r.get("time_enqueued") is not None:
+        out["queue_ms"] = round(max(0.0, float(r["time_enqueued"]) * 1000.0), 1)
+    return out
+
+
+def _note_timings(t):
+    """The rail's view of the last finished request (LAST_TIMINGS)."""
+    with ACTIVITY_LOCK:
+        LAST_TIMINGS.clear()
+        LAST_TIMINGS.update(t, at=int(time.time()))
+
+
+class Conductor:
+    """The one thread that calls into the Generator.
+
+    exllamav3's enqueue/iterate/cancel take no locks, and one iterate() steps every
+    live job at once: two request threads each running an iterate() loop would step
+    the batch twice over and read each other's results. So requests talk to this
+    thread through its inbox and it alone touches GEN -- exllamav3's AsyncGenerator,
+    with threads for asyncio:
+
+      submit(job) -> the request's own queue: ("result", r) for each streaming
+                     result of its job, or ("error", exc) once
+      cancel(box) -> that job leaves the engine (the client went away)
+      run(fn)     -> fn() on this thread, between two steps (the vision tower);
+                     idle=True waits until no job is live (generate(), which drives
+                     the whole queue itself) and holds back whatever comes in after
+                     it, so a steady stream of requests cannot starve it
+
+    Results are routed by serial, which a requeued job keeps, and delivery never
+    blocks: a reader that fell behind must not stall every other request's decode.
+    """
+
+    def __init__(self):
+        self.inbox = queue.Queue()
+        self.live = {}          # serial -> [job, box]
+        self.held = []          # inbox items waiting behind an idle-only run()
+        self.thread = threading.Thread(target=self._loop, name="conductor", daemon=True)
+        self.thread.start()
+
+    # -- request threads ---------------------------------------------------------
+    def submit(self, job):
+        box = queue.Queue()
+        self.inbox.put(("add", job, box))
+        return box
+
+    def cancel(self, box):
+        self.inbox.put(("cancel", box, None))
+
+    def run(self, fn, idle=False):
+        box = queue.Queue()
+        self.inbox.put(("idle" if idle else "run", fn, box))
+        kind, value = box.get()
+        if kind == "error":
+            raise value
+        return value
+
+    # -- this thread -------------------------------------------------------------
+    def _loop(self):
+        while True:
+            try:
+                # nothing live means nothing held either (_release), so sleep
+                self._take(block=not self.live)
+                if self.live:
+                    self._step()
+                self._release()
+            except Exception:                  # noqa: BLE001 - outlives any request
+                traceback.print_exc()
+
+    def _take(self, block):
+        try:
+            item = self.inbox.get(block=block)
+        except queue.Empty:
+            return
+        while item is not None:
+            self._handle(item)
+            try:
+                item = self.inbox.get_nowait()
+            except queue.Empty:
+                item = None
+
+    def _handle(self, item):
+        op, what, box = item
+        if op == "cancel":
+            self._cancel(what)
+        elif self.held or (op == "idle" and self.live):
+            self.held.append(item)
+        else:
+            self._do(item)
+
+    def _release(self):
+        while self.held and not (self.held[0][0] == "idle" and self.live):
+            self._do(self.held.pop(0))
+
+    def _do(self, item):
+        op, what, box = item
+        if op == "add":
+            try:
+                serial = GEN.enqueue(what)
+            except Exception as exc:           # noqa: BLE001 - it never reached the engine
+                box.put(("error", exc))
+                return
+            self.live[serial] = [what, box]
+            return
+        try:
+            box.put(("value", what()))
+        except Exception as exc:               # noqa: BLE001 - the caller's to raise
+            box.put(("error", exc))
+
+    def _cancel(self, box):
+        for serial, (job, owner) in list(self.live.items()):
+            if owner is box:
+                del self.live[serial]
+                try:
+                    GEN.cancel(job)
+                except Exception as exc:       # noqa: BLE001
+                    print("[api] could not cancel an abandoned job: %r" % exc, flush=True)
+                return
+        # not in the engine yet: still held behind an idle-only run()
+        self.held = [it for it in self.held if it[2] is not box]
+
+    def _step(self):
+        try:
+            results = GEN.iterate()
+        except Exception as exc:               # noqa: BLE001
+            # Not one job's failure (reap_failed_job turns those into "error" results)
+            # but the step itself: every live job gets it, and the queue is cleared so
+            # the next request starts on a clean engine, not a half-stepped batch.
+            print("[api] engine step failed with %d job(s) live: %r"
+                  % (len(self.live), exc), flush=True)
+            traceback.print_exc()
+            try:
+                GEN.clear_queue()
+            except Exception as exc2:          # noqa: BLE001
+                print("[api] could not clear the queue after it: %r" % exc2, flush=True)
+            for _job, box in self.live.values():
+                box.put(("error", exc))
+            self.live.clear()
+            return
+        for r in results:
+            entry = self.live.get(r.get("serial"))
+            if entry is None:
+                continue                       # cancelled while this step ran
+            if r.get("job") is not None:
+                entry[0] = r["job"]            # a requeued job goes on under its serial
+            if r.get("stage") == "error":
+                del self.live[r["serial"]]
+                entry[1].put(("error", r.get("error") or RuntimeError("the engine dropped this job")))
+            elif r.get("stage") == "streaming":
+                entry[1].put(("result", r))
+                if r.get("eos"):
+                    del self.live[r["serial"]]
+
+
+_CONDUCTOR_START = threading.Lock()
+
+
+def conductor():
+    """The engine's one thread, started on first use (build_engine starts it)."""
+    global CONDUCTOR
+    if CONDUCTOR is None:
+        with _CONDUCTOR_START:
+            if CONDUCTOR is None:
+                CONDUCTOR = Conductor()
+    return CONDUCTOR
 
 
 def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=None,
-                      embeddings=None):
+                      embeddings=None, meta=None):
     """Yield decoded text fragments from exllamav3 as they are produced.
 
     Real streaming goes through enqueue() + iterate(): iterate() reports a
     "streaming" stage result for every decode step, so the HTTP layer can forward
     text while the job is still running. generate() cannot do that -- it
     accumulates the completion internally and returns only once the job is done,
-    which is why this server used to go silent and then emit one blob.
+    which is why this server used to go silent and then emit one blob. Both calls
+    are the conductor's to make; this side reads its own job's results.
 
     Every exllamav3-version-specific detail lives in here. Callers only ever see a
-    fragment iterator, and the terminal metrics land in LAST.
+    fragment iterator, and the terminal metrics land in `meta`, the caller's own
+    dict: another request's can be finishing at the same moment.
     """
+    meta = {} if meta is None else meta
     stops_all = list(STOP_IDS) + ["<|im_end|>"] + list(stops or [])
-    LAST.clear()
-    if embeddings:
-        # Special-token encoding is on for images: the alias IS a special token, and
-        # only this call expands it into the span the embeddings line up with.
-        try:
-            input_ids = TOK.encode(prompt, encode_special_tokens=True, add_bos=True,
-                                   embeddings=embeddings)
-        except TypeError:
-            input_ids = TOK.encode(prompt, add_bos=True, embeddings=embeddings)
-    else:
-        try:
-            input_ids = TOK.encode(prompt, encode_special_tokens=False, add_bos=True)
-        except TypeError:
-            input_ids = TOK.encode(prompt, add_bos=True)
+    with TOK_LOCK:
+        if embeddings:
+            # Special-token encoding is on for images: the alias IS a special token,
+            # and only this call expands it into the span the embeddings line up with.
+            try:
+                input_ids = TOK.encode(prompt, encode_special_tokens=True, add_bos=True,
+                                       embeddings=embeddings)
+            except TypeError:
+                input_ids = TOK.encode(prompt, add_bos=True, embeddings=embeddings)
+        else:
+            try:
+                input_ids = TOK.encode(prompt, encode_special_tokens=False, add_bos=True)
+            except TypeError:
+                input_ids = TOK.encode(prompt, add_bos=True)
     n_prompt = int(input_ids.shape[-1]) if hasattr(input_ids, "shape") else len(input_ids)
-    LAST["prompt_tokens"] = n_prompt
+    meta["prompt_tokens"] = n_prompt
     # exllamav3 reserves prompt + max_new_tokens + 1 + draft depth up front and
     # refuses a job that cannot fit the whole cache, so a generous default allowance
     # would make the top of the context unusable. Answer as much as fits instead.
@@ -843,39 +1042,39 @@ def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=No
               embeddings=list(embeddings or []),
               max_rq_tokens=None,
               stop_on_loop=None)
-    serial = GEN.enqueue(job)
+    box = conductor().submit(job)
     finished = False
     try:
-        while GEN.num_remaining_jobs():
-            for r in GEN.iterate():
-                if r.get("stage") == "error":
-                    # A contained per-job failure. Surface it rather than returning a
-                    # silently truncated completion.
-                    finished = True
-                    raise r["error"]
-                if r.get("stage") != "streaming" or r.get("serial") != serial:
-                    continue
-                frag = r.get("text") or ""
-                if frag:
-                    yield frag
-                if r.get("eos"):
-                    finished = True
-                    LAST["new_tokens"] = r.get("new_tokens")
-                    LAST["eos_reason"] = r.get("eos_reason")
-                    LAST["prompt_tokens"] = r.get("prompt_tokens") or n_prompt
-                    # Without this, usage and the log line report a 0% prompt-cache hit
-                    # on every request -- which is exactly what a cold Generator looks
-                    # like, the one misdiagnosis this server is built to rule out.
-                    LAST["cached_tokens"] = r.get("cached_tokens") or 0
+        while True:
+            kind, r = box.get()
+            if kind == "error":
+                # A contained per-job failure, or the engine step itself. Surface it
+                # rather than returning a silently truncated completion.
+                finished = True
+                raise r
+            frag = r.get("text") or ""
+            if frag:
+                yield frag
+            if r.get("eos"):
+                finished = True
+                meta["new_tokens"] = r.get("new_tokens")
+                meta["eos_reason"] = r.get("eos_reason")
+                meta["prompt_tokens"] = r.get("prompt_tokens") or n_prompt
+                # Without this, usage and the log line report a 0% prompt-cache hit
+                # on every request -- which is exactly what a cold Generator looks
+                # like, the one misdiagnosis this server is built to rule out.
+                meta["cached_tokens"] = r.get("cached_tokens") or 0
+                # the engine's own clock for this job (_timings)
+                for k in ("time_enqueued", "time_prefill", "time_generate"):
+                    if r.get(k) is not None:
+                        meta[k] = r[k]
+                return
     finally:
         if not finished:
             # The client went away mid-answer (or something upstream raised): cancel,
-            # or the next request's loop runs this orphan to its end first -- up to
-            # the whole allowance, minutes of decode nobody reads.
-            try:
-                GEN.cancel(job)
-            except Exception as exc:
-                print("[api] could not cancel an abandoned job: %r" % exc, flush=True)
+            # or this orphan decodes to the end of its allowance -- minutes nobody
+            # reads, in a batch slot another request may be waiting for.
+            conductor().cancel(box)
 
 
 def context_limit():
@@ -903,7 +1102,11 @@ def answer_room(n_prompt):
 
 def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None, stops=None,
                        embeddings=None):
-    """The old one-shot path, kept as the fallback for builds whose Job API differs."""
+    """The old one-shot path, kept as the fallback for builds whose Job API differs.
+
+    generate() runs the whole queue itself and looks up every result by its own
+    serials, so another request's job in the same step breaks it: the conductor
+    runs it only once no job is live."""
     kw = {"stop_conditions": list(STOP_IDS) + ["<|im_end|>"] + list(stops or [])}
     if embeddings:
         kw["embeddings"] = list(embeddings)
@@ -913,24 +1116,23 @@ def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None, stops=N
         kw["temperature"] = float(temperature)
     if top_p is not None:
         kw["top_p"] = float(top_p)
-    with LOCK:
+
+    def blocking():
         try:
+            return GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
+                                return_last_results=True, completion_only=True, **kw)
+        except TypeError:
             try:
-                comp, last = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
-                                          return_last_results=True,
-                                          completion_only=True, **kw)
+                return GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
+                                    return_last_results=True, completion_only=True)
             except TypeError:
-                try:
-                    comp, last = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
-                                              return_last_results=True,
-                                              completion_only=True)
-                except TypeError:
-                    comp, last = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
-                                              return_last_results=True)
-                    if isinstance(comp, str) and comp.startswith(prompt):
-                        comp = comp[len(prompt):]
-        except Exception:
-            raise
+                comp, last = GEN.generate(prompt, max_new_tokens=max_tokens, add_bos=True,
+                                          return_last_results=True)
+                if isinstance(comp, str) and comp.startswith(prompt):
+                    comp = comp[len(prompt):]
+                return comp, last
+
+    comp, last = conductor().run(blocking, idle=True)
     if isinstance(comp, (list, tuple)):
         comp = comp[0] if comp else ""
     if not isinstance(last, dict):
@@ -949,37 +1151,34 @@ def collect(prompt, max_tokens, temperature=None, top_p=None, stops=None,
     generate() did, so non-streaming callers are unchanged.
     """
     buf = []
+    meta = {}
     t_start = time.time()
     t_first = None
     try:
-        with LOCK:
-            frags = _engine_fragments(prompt, max_tokens, temperature, top_p, stops,
-                                      embeddings)
-            try:
-                for frag in frags:
-                    if t_first is None:
-                        t_first = time.time()
-                    buf.append(frag)
-                    if on_delta is not None:
-                        on_delta(clean_completion("".join(buf)))
-            finally:
-                # closed here, inside the lock: an abandoned job is cancelled by the
-                # thread that owns the engine, never by a garbage collector later
-                frags.close()
-            # Snapshot while this request still owns the engine: the next request
-            # clears LAST the moment it takes the lock.
-            out = dict(LAST)
+        frags = _engine_fragments(prompt, max_tokens, temperature, top_p, stops,
+                                  embeddings, meta=meta)
+        try:
+            for frag in frags:
+                if t_first is None:
+                    t_first = time.time()
+                buf.append(frag)
+                if on_delta is not None:
+                    on_delta(clean_completion("".join(buf)))
+        finally:
+            # closed here: an abandoned job leaves the engine now, not whenever a
+            # garbage collector gets to this generator
+            frags.close()
     except TypeError as exc:
         print("[api] enqueue path failed (%r); falling back to blocking generate()"
               % exc, flush=True)
         return _generate_blocking(prompt, max_tokens, temperature, top_p, stops,
                                   embeddings)
+    out = dict(meta)
     if t_first is not None:
         # Only the incremental path has a first-token time; the blocking fallback
         # gets no timings rather than invented ones.
         out["timings"] = _timings(out, t_start, t_first, time.time())
-        LAST_TIMINGS.clear()
-        LAST_TIMINGS.update(out["timings"], at=int(time.time()))
+        _note_timings(out["timings"])
     out["text"] = clean_completion("".join(buf))
     if not out["text"].strip():
         # Never answer empty. The incremental path can yield nothing if a build's
@@ -1778,6 +1977,8 @@ class Handler(BaseHTTPRequestHandler):
             # Read-only contract: what this server can actually do, so a client does
             # not have to guess (and so a UI can grey out what is unavailable).
             cache_tokens = getattr(getattr(GEN, "cache", None), "max_num_tokens", None)
+            with ACTIVITY_LOCK:
+                activity, last_timings = dict(ACTIVITY), dict(LAST_TIMINGS) or None
             return self._send(200, {
                 "service": "collabosm",
                 "model": MODEL_ID,
@@ -1788,7 +1989,10 @@ class Handler(BaseHTTPRequestHandler):
                 # the context a request can use: the native window, or YaRN's
                 "context": {"native": ROPE.get("native"), "yarn_factor": LAUNCH.get("yarn_factor", 0),
                             "max_positions": ROPE.get("max") or ROPE.get("native")},
-                "concurrency": {"serving": 1, "requested": CONCURRENCY},
+                # requests decoded together (the engine's batch), and what the recipe
+                # asked for; more than that wait their turn in the engine's queue
+                "concurrency": {"serving": LAUNCH.get("concurrency") or 1,
+                                "requested": CONCURRENCY},
                 "dialects": ["/v1/chat/completions", "/v1/responses"],
                 "vision": {
                     "enabled": VISION_WANTED,
@@ -1810,8 +2014,8 @@ class Handler(BaseHTTPRequestHandler):
                     "thinking_budget": None,
                 },
                 "launch": LAUNCH,
-                "activity": dict(ACTIVITY),
-                "last_timings": dict(LAST_TIMINGS) or None,
+                "activity": activity,
+                "last_timings": last_timings,
                 "machine": machine(),
             })
         if self.path in ("/", "/v1"):
@@ -2283,10 +2487,27 @@ def warm_up():
         print("[api] warm-up: %s-token prefill + %s tokens in %.1fs (first-use autotune paid "
               "here, not by the first request)" % (r.get("prompt_tokens"), r.get("new_tokens"),
                                                      time.time() - t0), flush=True)
+        width = int(LAUNCH.get("concurrency") or 1)
+        if width > 1:
+            # and a batched decode: its shapes are new to the kernels as well
+            t1, done = time.time(), []
+
+            def stream(i):
+                done.append(collect("Warm-up stream %d of %d. Count from one to twenty in "
+                                    "words." % (i + 1, width), 24))
+
+            threads = [threading.Thread(target=stream, args=(i,)) for i in range(width)]
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+            print("[api] warm-up: %d of %d streams decoded side by side in %.1fs"
+                  % (len(done), width, time.time() - t1), flush=True)
     except Exception as exc:                          # noqa: BLE001 - never blocks serving
         print("[api] warm-up failed after %.1fs: %r -- serving anyway"
               % (time.time() - t0, exc), flush=True)
-    LAST_TIMINGS.clear()
+    with ACTIVITY_LOCK:
+        LAST_TIMINGS.clear()
 
 
 def main():

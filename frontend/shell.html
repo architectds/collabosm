@@ -278,16 +278,18 @@
   .gpu .chips { margin-top: 10px; gap: 5px; }
   .gpu .chip { padding: 0 8px; gap: 5px; }
   .pick { position: relative; display: block; margin-top: 12px; }
+  /* dressed like the card's other controls: transparent like its chips and its Start
+     button (as tall as that button), with its icon and text on the chips' vertical lines */
   .pick select {
-    appearance: none; -webkit-appearance: none; width: 100%; height: 34px; padding: 0 32px 0 34px;
-    border: 1px solid var(--line-strong); border-radius: 9px; background: var(--raise); color: var(--fg);
+    appearance: none; -webkit-appearance: none; width: 100%; height: 36px; padding: 0 32px 0 28px;
+    border: 1px solid var(--line-strong); border-radius: 9px; background: transparent; color: var(--fg);
     font: inherit; font-size: 12.5px; cursor: pointer; text-overflow: ellipsis;
   }
   .pick select:hover { border-color: var(--fg); }
   .pick select:disabled { cursor: default; opacity: .7; }
   .pick select option { background: var(--raise); color: var(--fg); }
   .pick .ico { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); }
-  .pick .ico.l { left: 11px; }
+  .pick .ico.l { left: 9px; }
   .pick .ico.r { right: 11px; }
   .facts {
     list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr;
@@ -451,6 +453,7 @@ const I18N = {
     'machine.up': 'service up {up}',
     'tip.ctx.yarn': 'Context: YaRN ×{f} over the native {native} positions',
     'tip.ctx.native': 'Context: the model’s native positions',
+    'tip.par': 'Parallel: up to {n} requests answer at the same time; more wait their turn',
     'machine.none': 'The server does not report its machine yet — that needs the newer api_server.',
     'sec.money': 'Compute units', 'money.src': 'Colab',
     'tip.balance': 'Compute units left on the account, read from Colab {ago} ago',
@@ -697,6 +700,7 @@ const I18N = {
     'machine.up': '服务已运行 {up}',
     'tip.ctx.yarn': '上下文：在原生 {native} 位置上 YaRN ×{f}',
     'tip.ctx.native': '上下文：模型原生的位置数',
+    'tip.par': '并发：最多 {n} 个请求同时作答，更多的排队等候',
     'machine.none': '服务端还没上报机器状态——需要新版 api_server。',
     'sec.money': '计算单元', 'money.src': 'Colab',
     'tip.balance': '账户剩余计算单元，{ago}前从 Colab 读取',
@@ -942,6 +946,7 @@ const I18N = {
     'machine.up': 'サービス稼働 {up}',
     'tip.ctx.yarn': 'コンテキスト：ネイティブ {native} 位置に YaRN ×{f}',
     'tip.ctx.native': 'コンテキスト：モデル本来の位置数',
+    'tip.par': '並列：最大 {n} 件のリクエストに同時に回答し、それ以上は順番待ち',
     'machine.none': 'サーバーはまだマシン状態を報告していません（新しい api_server が必要です）。',
     'sec.money': 'コンピューティング単位', 'money.src': 'Colab',
     'tip.balance': 'アカウントに残るコンピューティング単位（{ago}前に Colab から取得）',
@@ -1584,6 +1589,7 @@ function machineHTML() {
   if (g.temp_c != null) chips.push(chip('thermo', 'temp'));
   if (g.power_w != null) chips.push(chip('zap', 'power'));
   if (sv.context && sv.context.max_positions) chips.push(chip('ruler', 'ctx'));
+  if (sv.concurrency && sv.concurrency.serving) chips.push(chip('layers', 'par'));
   if (sv.vision) chips.push(chip(sv.vision.available ? 'eye' : 'eyeoff', 'vision',
                                  'only' + (sv.vision.available ? '' : sv.vision.enabled ? ' alert' : ' off')));
   if (sv.launch && sv.launch.cache_size) chips.push(chip('sliders', 'launch', 'only'));
@@ -1825,6 +1831,9 @@ function bindValues() {
   tips.power = t('tip.power');
   v.ctx = ktok(ctx.max_positions);
   tips.ctx = ctx.yarn_factor ? t('tip.ctx.yarn', { f: ctx.yarn_factor, native: num(ctx.native, 0) }) : t('tip.ctx.native');
+  const par = (sv.concurrency || {}).serving;
+  v.par = par ? '×' + par : '';
+  tips.par = par ? t('tip.par', { n: par }) : '';
   tips.vision = !sv.vision ? '' : sv.vision.available ? t('tip.vision.on')
     : sv.vision.enabled ? t('tip.vision.err', { err: sv.vision.error || '?' }) : t('tip.vision.off');
   tips.launch = launch.cache_size ? t('tip.launch', { cache: num(launch.cache_size, 0), cq: launch.cache_quant,

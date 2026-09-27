@@ -86,17 +86,17 @@
         "GCS": 8192,
         "VISION": 1,
         "YARN_FACTOR": 1.5625,
-        "CONCURRENCY": 1
+        "CONCURRENCY": 2
       },
       "facts": {
         "weights": {"v": 15.26, "unit": "GiB", "measured": true, "src": "16,384,243,706 B at branch SC_4.00bpw_H5_V6 (Hugging Face tree), embeddings, 6-bit vision tower and 4-bit MTP layer included; the pack's own plot puts this quant at KL 0.0062 vs ~0.015 for the plain 3.50 bpw it replaces"},
-        "vram_mib": {"v": 32800, "measured": false, "src": "derived: 17.1 GiB measured outside the KV on 2026-09-27 (26,746 MiB in all with Q8 KV at 262K) + Q4 KV for 819,200 tokens at 19,584 B each (16 attention layers + the MTP layer) = 14.9 GiB; not yet loaded this way"},
+        "vram_mib": {"v": 33500, "measured": false, "src": "derived: 17.1 GiB measured outside the KV on 2026-09-27 (26,746 MiB in all with Q8 KV at 262K) + Q4 KV for 819,200 tokens at 19,584 B each (16 attention layers + the MTP layer) = 14.9 GiB + the second recurrent state slot for two-way decode, 728 MiB (48 GDN layers x 48 heads x 128 x 128 fp32 x 5 for ndt 4, plus conv state); not yet loaded this way"},
         "prefill_tps": {"v": 2544, "measured": true, "src": "32,551-token cold prompt, second of a pair, on the A100-40G 2026-09-27 with Q8 KV (4K: 2,935; 119K: 1,435)"},
         "decode_tps": {"v": 50.4, "measured": true, "src": "512 tokens at 32K context, MTP ndt 4, on the A100-40G 2026-09-27 with Q8 KV (short context: 62.9; ~128K: ~44); Q4 reads half the KV per token, so long contexts should come out a little faster"},
         "eta_min": {"v": 6, "measured": true, "src": "billing to READY in 5 min 51 s on 2026-09-27, 43.6 s of it a warm-up since cut to ~8K tokens"},
-        "context": {"v": 409600, "measured": false, "src": "per conversation: YaRN 1.5625 over the native 262,144 (the model card documents YaRN up to 1M); the 819,200-token cache holds two such conversations, one generating at a time; quality past 262K not measured"},
+        "context": {"v": 409600, "measured": false, "src": "per conversation: YaRN 1.5625 over the native 262,144 (the model card documents YaRN up to 1M); the 819,200-token cache holds two such conversations, decoding together; quality past 262K not measured"},
         "vision": {"v": true, "measured": false, "src": "the tower is quantized to 6 bits inside the shards (needs ExLlamaV3 >= 1.4.4; 1.5.1 here); never loaded"},
-        "concurrency": {"v": 1, "measured": true, "src": "api_server serialises requests"},
+        "concurrency": {"v": 2, "measured": false, "src": "two jobs per engine step: -ambs 2 gives the second recurrent state slot, and api_server's one conductor thread drives the Generator for both; 2 x 409,600 positions fit the 819,200-token cache; a third request waits its turn; not yet run on this card"},
         "host_ram": {"v": "ccs 16 + rcs 16 GiB", "measured": false, "src": "36.7 of 83.5 GiB in use on 2026-09-27; rcs is 16, not 8: a GDN checkpoint here is ~150 MB (48 layers x 48 heads x 128 x 128 fp32), one every ~2048 tokens, so an 86K-token Codex prompt leaves ~42 of them (~6 GB)"}
       }
     },
@@ -126,7 +126,7 @@
         "vram_mib": {"v": 76437, "measured": true, "src": "after load at cache 500224, gcs 4096, vision off; with gcs 8192 and the tower together: not measured"},
         "context": {"v": 500224, "measured": false, "src": "the KV fits (measured); positions past the native 262,144 come from YaRN x2 (rope_parameters + max_position_embeddings 524288, which is how exllamav3 derives the factor); quality there not measured"},
         "vision": {"v": true, "measured": false, "src": "the pack carries vision_k6.safetensors (561 MB); its weights sit in pinned host RAM (EXL3_VISION_PINNED) so the tower costs no VRAM for weights; image encoding speed not measured"},
-        "concurrency": {"v": 1, "measured": true, "src": "api_server serialises requests; how many live jobs would fit is computed in docs/CONCURRENCY.md, never exercised"},
+        "concurrency": {"v": 1, "measured": true, "src": "one job per engine step (CONCURRENCY 1); how many live jobs would fit is computed in docs/CONCURRENCY.md, never exercised"},
         "host_ram": {"v": "ngr 36.4 + ccs 32 + rcs 24 GiB", "measured": false, "src": "the verified run used -ccs 16 -rcs 16"}
       }
     }

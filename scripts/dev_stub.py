@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import types
 from http.server import ThreadingHTTPServer
@@ -165,8 +166,10 @@ def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=F
     plain = ("<think>%s</think>\n%s" % (thoughts, answer)) if think else answer
 
     def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None,
-                          stops=None, embeddings=None):
-        """Same contract as the shipping seam: yield raw text fragments."""
+                          stops=None, embeddings=None, meta=None):
+        """Same contract as the shipping seam: yield raw text fragments, and leave
+        the terminal metrics in the caller's `meta`."""
+        meta = {} if meta is None else meta
         call = tool_call_for(prompt) if tool_call else None
         if call is not None and cut_call and "<tool_call>" in call:
             # the token ceiling lands inside the call's first value
@@ -175,22 +178,21 @@ def install_engine(answer, thoughts, chunk, delay, think, silent=False, vision=F
             ("<think>%s</think>\n%s" % (thoughts, call)) if think else call)
         _record({"prompt": prompt, "embeddings": len(embeddings or []),
                  "vision_calls": getattr(api_server.VISION, "calls", 0)})
-        api_server.LAST.clear()
-        api_server.LAST["prompt_tokens"] = 29
+        meta["prompt_tokens"] = 29
         if silent:
             # An engine that stops on the first token: nothing to stream. This is
             # the shape that produced empty answers on the live A100 pack, so the
             # harness has to be able to reproduce it.
-            api_server.LAST["new_tokens"] = 1
-            api_server.LAST["eos_reason"] = "stop_token"
+            meta["new_tokens"] = 1
+            meta["eos_reason"] = "stop_token"
             return
         for i in range(0, len(text), chunk):
             if delay:
                 time.sleep(delay)
             yield text[i:i + chunk]
-        api_server.LAST["new_tokens"] = len(text) // 4
-        api_server.LAST["eos_reason"] = ("max_new_tokens" if call is not None and cut_call
-                                         and "<tool_call>" in call else "stop_token")
+        meta["new_tokens"] = len(text) // 4
+        meta["eos_reason"] = ("max_new_tokens" if call is not None and cut_call
+                              and "<tool_call>" in call else "stop_token")
 
     def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None,
                            stops=None, embeddings=None):
@@ -240,26 +242,29 @@ def install_script(path, chunk, delay):
     with open(path, encoding="utf-8") as fh:
         turns = [t if isinstance(t, dict) else {"text": t} for t in json.load(fh)]
     played = [0]
+    turn_lock = threading.Lock()      # generations run side by side, as on a real box
     prompts = os.environ.get("STUB_PROMPTS")
 
     def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None,
-                          stops=None, embeddings=None):
-        n = played[0]
-        played[0] += 1
+                          stops=None, embeddings=None, meta=None):
+        meta = {} if meta is None else meta
+        with turn_lock:
+            n = played[0]
+            played[0] += 1
+            if prompts:
+                with open(prompts, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"turn": n, "prompt": prompt,
+                                         "images": len(embeddings or [])},
+                                        ensure_ascii=False) + "\n")
         turn = turns[n] if n < len(turns) else {"text": "(script exhausted)"}
         text = turn["text"]
-        if prompts:
-            with open(prompts, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps({"turn": n, "prompt": prompt,
-                                     "images": len(embeddings or [])}, ensure_ascii=False) + "\n")
-        api_server.LAST.clear()
-        api_server.LAST["prompt_tokens"] = len(prompt) // 4
+        meta["prompt_tokens"] = len(prompt) // 4
         for i in range(0, len(text), chunk):
             if delay:
                 time.sleep(delay)
             yield text[i:i + chunk]
-        api_server.LAST["new_tokens"] = max(1, len(text) // 4)
-        api_server.LAST["eos_reason"] = turn.get("eos") or "stop_token"
+        meta["new_tokens"] = max(1, len(text) // 4)
+        meta["eos_reason"] = turn.get("eos") or "stop_token"
 
     api_server._engine_fragments = _engine_fragments
     api_server.STOP_IDS = []
@@ -291,6 +296,9 @@ def main():
                    a.tool_call, a.cut_call)
     if a.script:
         install_script(a.script, a.chunk, a.delay)
+    # no engine to cap it: generations run side by side, and /v1/status says what the
+    # environment asked for (CONCURRENCY), as a real box's does
+    api_server.LAUNCH.setdefault("concurrency", api_server.CONCURRENCY)
     srv = ThreadingHTTPServer((a.host, a.port), api_server.Handler)
     print("[dev_stub] listening on http://%s:%d  (chunk=%d delay=%.3fs think=%s)"
           % (a.host, a.port, a.chunk, a.delay, a.think), flush=True)

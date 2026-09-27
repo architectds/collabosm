@@ -173,15 +173,17 @@ needs `-rcs` in the tens of GB, which competes with `-ccs` for the same RAM.
   has filled a 16 GB tier and watched the eviction policy choose.
 - **"Fits" is not "faster".** One GPU shares compute and bandwidth across live jobs. Section 2 is a
   capacity answer, not a throughput answer.
-- **The serialisation lock is still in place.** `api_server.py` holds one Generator and one cache,
-  so today "multiple streams" means *queued*, and a conversation-level swap scheduler does not
-  exist yet. What lifting it takes, from the ExLlamaV3 1.5.1 source: the Generator batches
-  continuously (`max_batch_size` 256), but a recurrent model's state slots are allocated at load by
-  the Cache from `-ambs` (`model_init` default **1**), so with the defaults the engine can hold one
-  live job whatever the Generator allows; and `enqueue`/`iterate`/`cancel` take no locks, so one
-  engine thread has to own the Generator and route `iterate()` results back to each request by
-  `r["job"]`. Then measure it here: `-ambs 4`, four concurrent requests, and the extra
-  `3 x 546 MiB` in `nvidia-smi`.
+- **The serialisation lock is gone; the measurement is not done.** `api_server.py` now does what
+  the ExLlamaV3 1.5.1 source asks for. The Generator batches continuously (its own default
+  `max_batch_size` is 256). A recurrent model's state slots are allocated at load by the Cache from
+  `-ambs` (`model_init` default **1**), so the recipe's `CONCURRENCY` becomes `-ambs N` and caps the
+  Generator's batch at the same N. `enqueue`/`iterate`/`cancel` take no locks, so one conductor
+  thread owns the Generator. It routes `iterate()` results back to each request by serial, which a
+  requeued job keeps (`r["job"]` does not survive a requeue). This Flash-Next recipe still runs
+  `CONCURRENCY 1`; the 27B recipe on the A100-40G runs 2. Neither has been measured on a card. The
+  test is unchanged: `-ambs N`, N concurrent requests, and the extra `(N - 1)` slots in `nvidia-smi`.
+  For the 27B at `ndt 4`, one slot is 728 MiB (48 GDN layers, 48 heads of 128 x 128 fp32, five
+  history steps), against 546 MiB here. A conversation-level swap scheduler still does not exist.
 - **Cheapest lever for more slots: `-ndt 2`.** Speculative depth is what makes each slot cost
   546 MiB; at `ndt 2` it is ~343 MiB. That trades decode speed for capacity.
 - **Vision has not been measured at these cache sizes**, and `-gcs 16384` is untested. At

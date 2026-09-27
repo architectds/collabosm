@@ -407,11 +407,12 @@ stand-in, see [docs/DEVELOPER.md](docs/DEVELOPER.md).)
 What you get:
 - **Qwen3.8-27B on the A100-40G**
   - Speed: about 2,500 word pieces (tokens) read per second and 50–63 written.
-  - Length: two conversations of up to about 400,000 tokens each, kept at once; one answers at a
-    time.
+  - Length: two conversations of up to about 400,000 tokens each, and both can answer at the same
+    time. A third request waits for one of them to finish.
   - Pictures: understood.
-  - These speeds were measured on 2026-09-27, before the 400,000-token setting, which has not been
-    loaded yet.
+  - These speeds were measured on 2026-09-27 with one answer at a time, before the 400,000-token
+    setting. Neither the new setting nor two answers at once has been tried on the GPU yet, and two
+    answers share the GPU, so each one writes more slowly than it would alone.
 - **Qwen3.8-Flash-Next on the A100-80G**
   - Speed: about 3,900 tokens read per second and about 97 written.
   - Length: conversations up to about 500,000 tokens.
