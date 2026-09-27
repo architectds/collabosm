@@ -105,6 +105,12 @@ MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", 32768))
 # request that does not say otherwise gets the trace.
 THINKING_DEFAULT = os.environ.get("THINKING_DEFAULT", "0").lower() in ("1", "true", "yes", "on")
 
+# One throwaway request before the port opens (warm_up): the first prefill at a chunk
+# size pays a one-time kernel autotune -- -gcs 8192 read 1,674 t/s on its first run and
+# 3,882 on its second (docs/MEASURED.md) -- and the first decode captures its graphs.
+# WARMUP=0 skips it.
+WARMUP = os.environ.get("WARMUP", "1").lower() not in ("0", "false", "no", "off")
+
 # The recipes.json entry this box was launched from (scripts/recipe.py -> up.sh ->
 # bootstrap.sh -> serve.sh): reported, so a client knows which card+model it is.
 RECIPE = os.environ.get("RECIPE") or None
@@ -2242,12 +2248,38 @@ class Handler(BaseHTTPRequestHandler):
            {"response": payload_for(r, text, reasoning, items, message=state["msg"])})
         self._sse_end()
 
+def warm_up():
+    """Pay the first-use costs before anyone is waiting: one prompt of a full chunk
+    and a few decoded tokens, so the prefill kernels autotune at LAUNCH's chunk size
+    and the decode path (MTP drafts included) is captured. It is not a request: the
+    activity counters never see it, and its timings are dropped, so the rail's speed
+    shows a real reply. A failure is logged and serving goes on."""
+    gcs = int(LAUNCH.get("generator_chunk_size") or 4096)
+    t0 = time.time()
+    try:
+        n = gcs
+        text = " ".join(str(i) for i in range(n))
+        while TOK.encode(text).shape[-1] < gcs + 32:
+            n = int(n * 1.25) + 64
+            text = " ".join(str(i) for i in range(n))
+        r = collect(text, 8)
+        print("[api] warm-up: %s-token prefill + %s tokens in %.1fs (first-use autotune paid "
+              "here, not by the first request)" % (r.get("prompt_tokens"), r.get("new_tokens"),
+                                                     time.time() - t0), flush=True)
+    except Exception as exc:                          # noqa: BLE001 - never blocks serving
+        print("[api] warm-up failed after %.1fs: %r -- serving anyway"
+              % (time.time() - t0, exc), flush=True)
+    LAST_TIMINGS.clear()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8090)))
     a = ap.parse_args()
     build_engine()
+    if WARMUP:
+        warm_up()
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     print("[api] listening on http://%s:%d" % (a.host, a.port), flush=True)
     srv.serve_forever()

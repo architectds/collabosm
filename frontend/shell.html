@@ -550,7 +550,7 @@ const I18N = {
     'det.billing': 'Raw billing output', 'det.billing.none': 'Not probed yet.',
     'sec.log': 'Log', 'log.empty': 'Nothing yet.',
     'ago.s': '{n} s', 'ago.m': '{n} min', 'dur.h': '{h} h {m} min', 'dur.m': '{m} min',
-    'note.idle.pick': 'No card yet. Starting one bills from the first second, so the numbers come first.',
+    'note.idle.pick': 'Select a GPU and a recipe in the GPUs section below.',
     'note.attached': 'External endpoint attached: never billed, never auto-stopped.',
     'note.stage.requesting': 'Requesting a Colab card and checking it. A card below the recipe’s VRAM is returned at once (~0.13 CU).',
     'note.stage.uploading': 'Uploading api_server, bootstrap and serve to /content.',
@@ -792,7 +792,7 @@ const I18N = {
     'det.billing': '服务端账目原文', 'det.billing.none': '还没探测。',
     'sec.log': '日志', 'log.empty': '暂无。',
     'ago.s': '{n} 秒', 'ago.m': '{n} 分钟', 'dur.h': '{h} 小时 {m} 分', 'dur.m': '{m} 分钟',
-    'note.idle.pick': '还没有卡。启动就从第一秒开始计费，所以先把数字给你看。',
+    'note.idle.pick': '在下面的「可用 GPU」里选一张卡和一个配方。',
     'note.attached': '外部端点已接上：不计费，也不会被自动停机。',
     'note.stage.requesting': '向 Colab 申请卡并校验；显存低于配方要求的卡会立刻退回（约 0.13 CU）。',
     'note.stage.uploading': '上传 api_server / bootstrap / serve 到 /content。',
@@ -1033,7 +1033,7 @@ const I18N = {
     'det.billing': 'サーバー側の課金出力', 'det.billing.none': 'まだ確認していません。',
     'sec.log': 'ログ', 'log.empty': 'まだありません。',
     'ago.s': '{n} 秒', 'ago.m': '{n} 分', 'dur.h': '{h} 時間 {m} 分', 'dur.m': '{m} 分',
-    'note.idle.pick': 'カードはまだありません。起動した瞬間から課金されるので、先に数字をお見せします。',
+    'note.idle.pick': '下の「利用可能な GPU」で GPU とレシピを選んでください。',
     'note.attached': '外部エンドポイントに接続済み：課金なし、自動停止なし。',
     'note.stage.requesting': 'Colab のカードを申請して確認中。レシピの VRAM に満たないカードはすぐに返却します（約 0.13 CU）。',
     'note.stage.uploading': 'api_server / bootstrap / serve を /content にアップロード中。',
@@ -1187,7 +1187,15 @@ let pending = false;    // a POST is in flight: every action waits for it (Start
 const drawn = {};       // section id -> markup it holds; unchanged sections are left alone,
                         // so buttons keep focus and <details> stay open between polls
 const openDetails = new Set();
-const folds = loadJSON('collabosm.folds', {});    // the viewer's own open/closed choices
+// The viewer's own open/closed choices. Colab and GPUs are where a first launch starts,
+// so they open on every load: a choice about them lasts only while the page is open.
+const SESSION_FOLDS = ['colab', 'gpus'];
+const folds = loadJSON('collabosm.folds', {});
+for (const k of SESSION_FOLDS) delete folds[k];
+function saveFolds() {
+  saveJSON('collabosm.folds', Object.fromEntries(
+    Object.entries(folds).filter(([k]) => !SESSION_FOLDS.includes(k))));
+}
 const choice = loadJSON('collabosm.choice', {});  // GPU id -> the recipe picked in its selector
 let toastTimer = null;
 
@@ -1993,7 +2001,7 @@ document.addEventListener('click', async (e) => {
   // local actions: nothing is sent, so they never wait for a POST
   if (act === 'fold') {
     folds[b.dataset.fold] = !isOpen(b.dataset.fold);
-    saveJSON('collabosm.folds', folds);
+    saveFolds();
     hideTip();
     return render();
   }
@@ -2036,7 +2044,7 @@ document.addEventListener('click', async (e) => {
     const r = await post('/control/select', { recipe: b.dataset.r });
     if (r && r.code === 'colab_setup') {     // the guide is where the next step is
       folds.colab = true;
-      saveJSON('collabosm.folds', folds);
+      saveFolds();
       render();
     }
     say(r);

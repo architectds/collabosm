@@ -68,6 +68,7 @@ SESSION=mybox CACHE_SIZE=524288 CPU_CACHE_GB=8 python scripts/provision.py up
 | `EXL3_VISION_PINNED` | `1` | keep the tower's weights in pinned host RAM instead of VRAM (an ExLlamaV3 switch) |
 | `YARN_FACTOR` | `2` | YaRN over the native 262,144 positions (0 = native only); see below |
 | `CONCURRENCY` | `1` | reported; requests are still served one at a time |
+| `WARMUP` | `1` | one throwaway full-chunk prefill and a few decoded tokens before the port opens, so the first request does not pay the kernel autotune (`-gcs 8192` measured 1,674 t/s on its first run, 3,882 on its second); `0` skips it |
 | `RUNTIME` | `wheel` | `wheel` (prebuilt, no compile) or `source` |
 | `TUNNEL_TOKEN` | unset | named-tunnel token: gives a **stable hostname** instead of a quick tunnel. Pair with `PUBLIC_URL` for the URL shown in status |
 
@@ -95,7 +96,7 @@ the numbers are estimates). Only recipes expected to run are listed; a pair that
 | recipe | card | model | status | notes |
 |---|---|---|---|---|
 | `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
-| `a100-40g/qwen38-27b` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 3.50 bpw, 15.4 GB | unmeasured | 262K native, vision, no n-gram table; ~22 GiB of 39 estimated |
+| `a100-40g/qwen38-27b` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured | 262K native, Q8 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~27 GiB of 39 estimated |
 
 The 40 GB card is requested by sending no shape at all (Colab's default is the standard 40 GB shape
 in every draw we logged); `shape=hm` is sent only for High-RAM.
