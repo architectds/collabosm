@@ -205,7 +205,7 @@ Type in the message box on the left and press Enter. The answer appears as it is
 ### Switch to another model
 
 Press **Stop**, choose another model in **GPUs**, and press **Start**. A switch is a full new start,
-with another ~11 minutes of loading.
+with another 6–11 minutes of loading.
 
 ### See what you have spent
 
@@ -246,9 +246,11 @@ program that works with OpenAI's API can; give it these three settings:
 
 | setting | value |
 |---|---|
-| Base URL (the API address) | `http://127.0.0.1:3020/v1` |
-| API key | anything, for example `sk-local` — collabosm adds the real key itself |
-| Model | `qwen3.8-flash-next-exl3` |
+| Base URL (the API address) | `http://127.0.0.1:3020/v1` — click the address in the status area to copy it |
+| API key | anything; the key icon beside the address copies one ready-made — collabosm puts the real key in its place itself |
+| Model | the one running, for example `qwen3.8-27b-exl3` (any name works: collabosm answers with the running model) |
+
+The address and the key stay the same for every GPU you start, so you set a program up once.
 
 While no GPU is running, these programs get the answer "No instance is running".
 
@@ -309,17 +311,16 @@ print(reply.choices[0].message.content)
 
 ### From another device
 
-The address above works only on this computer. To use the model from another device — a laptop, a
-phone app — while the GPU is running:
+The address above works only on this computer. To use the model from another device (a laptop, a
+phone app) while the GPU is running, open the **Tunnel** section:
 
-1. Click the **address** in the status area (it ends in `.trycloudflare.com`): that copies the base
-   URL.
-2. Click the **key** icon beside it: that copies the API key.
-3. Give both to the program on the other device, with the model `qwen3.8-flash-next-exl3`.
+1. **Copy address** copies the GPU's public address (it ends in `.trycloudflare.com/v1`).
+2. **Copy key** copies its real API key.
+3. Give both to the program on the other device.
 
-Anyone who has both can use your GPU — and your compute units — until you stop it. Both change
-every time you start a GPU. (The chat on this computer never needs the key: collabosm adds it to
-every request itself, so the page never holds it until you press the key button.)
+Anyone who has both can use your GPU, and your compute units, until you stop it. Both change every
+time you start a GPU. (Nothing on this computer needs the real key: collabosm puts it into every
+request itself, so the page never holds it until you press **Copy key**.)
 
 ---
 
@@ -394,8 +395,8 @@ stand-in, see [docs/DEVELOPER.md](docs/DEVELOPER.md).)
 
 | GPU | model | status | compute units per hour | about per hour | ready in |
 |---|---|---|---|---|---|
+| A100-40G (the default) | Qwen3.8-27B | measured once | 5.37 (Colab's figure) | $0.54 | ~6 min |
 | A100-80G High-RAM | Qwen3.8-Flash-Next | tested | 6.77 (Colab's own rate) | $0.68 | ~11 min |
-| A100-40G | Qwen3.8-27B | not tested yet | 5.37 (estimate) | $0.54 | ~6 min |
 
 - Compute units are Colab's currency: about $0.10 each when bought pay-as-you-go.
 - Loading counts too: about 1.8 compute units per start on the 80G GPU, which the cost card shows
@@ -403,10 +404,19 @@ stand-in, see [docs/DEVELOPER.md](docs/DEVELOPER.md).)
 - collabosm keeps a record of every session, and what it cost, in `.collabosm/ledger.json` in your
   home folder.
 
-What you get on the tested GPU: about 3,900 word pieces (tokens) read per second and about 97
-written per second; conversations up to about 500,000 tokens long; pictures understood. (Those
-speeds were measured with conversations up to 114,000 tokens; the 500,000-token limit and pictures
-are set up but have not yet been measured together.)
+What you get:
+- **Qwen3.8-27B on the A100-40G**
+  - Speed: about 2,500 word pieces (tokens) read per second and 50–63 written.
+  - Length: two conversations of up to about 400,000 tokens each, kept at once; one answers at a
+    time.
+  - Pictures: understood.
+  - These speeds were measured on 2026-09-27, before the 400,000-token setting, which has not been
+    loaded yet.
+- **Qwen3.8-Flash-Next on the A100-80G**
+  - Speed: about 3,900 tokens read per second and about 97 written.
+  - Length: conversations up to about 500,000 tokens.
+  - Pictures: understood.
+  - Those speeds were measured with conversations up to 114,000 tokens.
 
 ### C. The command line
 

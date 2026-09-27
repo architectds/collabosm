@@ -38,8 +38,8 @@ ExLlamaV3 is the only engine in this repo. See `docs/MEASURED.md` for provenance
 ## Quickstart
 
 ```bash
-python scripts/provision.py up                                # the default recipe: Flash-Next on an A100-80G
-python scripts/provision.py up --recipe a100-40g/qwen38-27b   # another card + model from recipes.json
+python scripts/provision.py up                                # the default recipe: the 27B on an A100-40G
+python scripts/provision.py up --recipe a100-80g/qwen38-fn    # another card + model from recipes.json
 python scripts/recipe.py list                                 # what the registry holds
 python scripts/provision.py down   # STOP THE VM. On a metered plan this is the most important command.
 ```
@@ -96,7 +96,7 @@ the numbers are estimates). Only recipes expected to run are listed; a pair that
 | recipe | card | model | status | notes |
 |---|---|---|---|---|
 | `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
-| `a100-40g/qwen38-27b` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured | 262K native, Q8 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~27 GiB of 39 estimated |
+| `a100-40g/qwen38-27b` (**default**) | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured (speeds measured with Q8 KV, `docs/MEASURED.md`) | two 409,600-token conversations (YaRN 1.5625, cache 819,200), Q4 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~32 GiB of 39 estimated |
 
 The 40 GB card is requested by sending no shape at all (Colab's default is the standard 40 GB shape
 in every draw we logged); `shape=hm` is sent only for High-RAM.
@@ -119,6 +119,7 @@ short prompts, the card warns). Quality past 262K is not measured yet.
 | `scripts/restore.py` | **the session restore script.** Re-attaches an orphaned VM from server truth, or creates one and actually requests the recipe's shape. Refuses/stops a box below the recipe's VRAM before spending anything. |
 | `scripts/colab_keepalive.py` | tells Colab the box is in use (the frontend calls it only while it is): the keep-alive ping, and with `--heartbeat` scripts/heartbeat.py on the kernel -- kernel use is what holds a box; the ping alone did not. Also refreshes the CLI's session record from the live assignment, and re-registers it when the CLI drops it |
 | `scripts/heartbeat.py` | runs on the VM, in the kernel, every 10 min while the box is in use and once on the tunnel's first miss: one JSON line of GPU/RAM/disk, the model server (process, /health, activity) and the tunnel (cloudflared running, the public address from the box itself), appended to /content/heartbeat.jsonl and kept on the laptop in ~/.collabosm/heartbeat.jsonl |
+| `scripts/bench_speed.py` | the running box's speed from its own timings, through the frontend: cold prefill pairs at a few lengths, decode at three context lengths, and an agent-like turn (a long cached prompt plus a few hundred new tokens); a few minutes of a box that bills |
 | `scripts/colab_ccu.py` | the account's real CU balance and burn rate, read from Colab |
 | `scripts/colab_auth.py` | the CLI's own sign-in, for the frontend: `status`, `login` (loopback redirect), `logout` (revoke) |
 | `scripts/probe_gpu.py` | runs on the VM; reports VRAM/RAM/cc/disk as one JSON line |
@@ -447,12 +448,15 @@ Both dialects stream through it line by line -- `/v1/responses` and `/v1/chat/co
 **Why a local proxy instead of pointing a client straight at the endpoint**
 
 - the bearer key stays in this process and is never handed to a browser -- until someone presses
-  the rail's key button (to reach the GPU from another device): `POST /control/key` fetches it on
+  **Copy key** in the rail's Tunnel section (to reach the GPU from another device): `POST /control/key` fetches it on
   that click, same-origin JSON only, and `/control/status`, polled every 1.5 s, never carries it,
 - the tunnel's hostname changes with every VM, and this address does not -- which is why local
   clients (Codex, ModelDock, Open WebUI, scripts) should be pointed here rather than at the
   tunnel: a new box needs no client edits, and a dead tunnel reads as the proxy's own 503 instead
   of Cloudflare's 530 page,
+- the rail's status area copies *this* address and a local key (`local_key` in the status, made once
+  in `~/.collabosm/local-key`): nothing checks that key -- the proxy puts the box's own in its
+  place -- it is there for clients that insist on one, and neither changes from one GPU to the next,
 - the page is same-origin with the proxy, so there is no CORS surface at all.
 
 **What the rail sees of traffic.** The proxy times what passes through it, in both dialects

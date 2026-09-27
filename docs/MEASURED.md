@@ -160,6 +160,41 @@ Two facts about the served model that cost real time to find:
   `completion_only=True`. This is the same class of bug as the per-request `Generator`: invisible,
   and it does not raise.
 
+## Qwen3.8-27B on the A100-40G (2026-09-27)
+
+One Colab A100-SXM4-40GB (40,960 MiB VRAM, 83.5 GiB RAM) against `turboderp/Qwen3.8-27B-exl3` @
+`SC_4.00bpw_H5_V6` (sha `516bf129059031c6da9416768ea6b7a1be00a8fc`, 16,384,243,706 B), ExLlamaV3
+1.5.1, **Q8 KV and a 262,144-token cache, no YaRN**, MTP `ndt=4`, `-gcs 8192`. Measured with
+`python scripts/bench_speed.py`: chat completions through the frontend on 3020, a unique nonce on
+every cold prompt, the server's own timings.
+
+| measure | value |
+|---|---:|
+| billing to READY | 5 min 51 s (load 114.3 s; a 43.6 s warm-up since cut to ~8K tokens) |
+| VRAM in use | 26,746 MiB |
+| host RAM in use | 36.7 of 83.5 GiB |
+| cold prefill, 4K (second of a pair) | **2,935 t/s** |
+| cold prefill, 32K (second of a pair) | **2,544 t/s** |
+| cold prefill, 119K (both of a pair) | **1,435 t/s** (82.8 s) |
+| decode, short context, 512 tokens | **62.9 t/s** |
+| decode, 32K context, 512 tokens | **50.4 t/s** |
+| decode, ~128K context (a Codex turn) | 43.9 t/s |
+| a follow-up: 32,512 cached + 78 new tokens | 1.1 s before the first token |
+| a Codex turn: 127,744 cached + 510 new tokens | 2.9 s before the first token |
+
+- **The last two rows explain the rail's low "prefill" on agent turns.** There it can read 70-180
+  t/s. Almost everything is cached, and what is left is a cost paid once per turn, divided by a few
+  hundred new tokens. That cost covers:
+  - the recurrent state for the cached prefix;
+  - attention over the whole context for the new tokens;
+  - the first decode step.
+- **Why decode is below Flash-Next's (75-97 t/s on the 80G card).** This is a dense 27B: every token
+  reads ~13 GB of weights, where Flash-Next's 6B active parameters read ~3 GB. And the 40 GB card
+  has 1.55 TB/s of bandwidth against the 80 GB card's 2.04.
+- **The recipe has since moved on, unloaded.** It now asks for Q4 KV and two 409,600-token
+  conversations (YaRN 1.5625, cache 819,200). That setting has not been loaded yet. Q4 reads half the
+  KV per token, so long-context decode should come out a little faster.
+
 ## What Colab charges, and what it counts as use (2026-09-25/26)
 
 | item | value | source |

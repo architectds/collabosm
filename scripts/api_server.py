@@ -825,9 +825,9 @@ def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=No
     room = answer_room(n_prompt)
     if room is not None:
         if room < 1:
-            raise ContextTooLong("the prompt is %d tokens; with this server's %d-token cache "
-                                 "that leaves no room for an answer"
-                                 % (n_prompt, getattr(GEN.cache, "max_num_tokens", 0)))
+            raise ContextTooLong("the prompt is %d tokens; this server's context is %d tokens, "
+                                 "which leaves no room for an answer"
+                                 % (n_prompt, context_limit() or 0))
         max_tokens = min(max_tokens, room)
     # Mirror Generator.generate()'s own Job construction field for field. A Job
     # built with fewer fields behaves differently: it stopped after a single
@@ -878,15 +878,27 @@ def _engine_fragments(prompt, max_tokens, temperature=None, top_p=None, stops=No
                 print("[api] could not cancel an abandoned job: %r" % exc, flush=True)
 
 
-def answer_room(n_prompt):
-    """Tokens of answer the cache can take after this prompt, or None if unknown."""
+def context_limit():
+    """One conversation's ceiling: the cache (the budget across jobs) or the model's
+    position window (native, or YaRN's), whichever is smaller. A cache larger than the
+    window holds more conversations, not longer ones -- past the window RoPE has no
+    positions left, and the answer is garbage. None if unknown."""
     total = getattr(getattr(GEN, "cache", None), "max_num_tokens", None)
     if not total:
+        return None
+    window = ROPE.get("max") or ROPE.get("native")
+    return min(int(total), int(window)) if window else int(total)
+
+
+def answer_room(n_prompt):
+    """Tokens of answer that fit after this prompt, or None if unknown."""
+    limit = context_limit()
+    if not limit:
         return None
     ndt = int(LAUNCH.get("num_draft_tokens") or 0)
     # the job's page reservation: prompt + max_new + 1 + draft depth, rounded up to a
     # 256-token page -- keep one page of slack for the rounding
-    return int(total) - int(n_prompt) - 1 - ndt - 256
+    return limit - int(n_prompt) - 1 - ndt - 256
 
 
 def _generate_blocking(prompt, max_tokens, temperature=None, top_p=None, stops=None,

@@ -36,7 +36,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = os.environ.get("RECIPES_FILE") or os.path.join(HERE, os.pardir, "recipes.json")
 STATUSES = ("verified", "unmeasured", "placeholder")
-DEFAULT = "a100-80g/qwen38-fn"
+DEFAULT = "a100-40g/qwen38-27b"
 ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # What the VM keeps besides the recipe's own keys, when the caller sets them: they are
 # read by bootstrap.sh, serve.sh and api_server.py, and a setting that stops at the

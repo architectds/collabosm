@@ -76,7 +76,7 @@ While `stage` is `ready`:
 | setting | value |
 |---|---|
 | base URL | `http://127.0.0.1:3020/v1` |
-| API key | any value, for example `sk-local`; the app replaces it with the real key |
+| API key | any value, for example `sk-local` or `local_key` from the status (what the page copies); the app replaces it with the real key |
 | model | the running one: `live_model` in the status, or `GET /v1/models` |
 
 - **Endpoints:** `/v1/chat/completions` and `/v1/responses` both work, streaming or not, with

@@ -93,6 +93,7 @@ import ctypes
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -399,6 +400,7 @@ class Control:
             self.state_dir = os.path.join(os.path.expanduser("~"), ".collabosm")
         self.ledger_path = os.path.join(self.state_dir, "ledger.json")
         self.persist_ledger = persist_ledger
+        self.local_key = self._local_key()
 
         self.lock = threading.RLock()
         self.proc = None
@@ -641,6 +643,7 @@ class Control:
         # The VM key is ours to hold, not the browser's: the rail only needs to
         # know that there is one.
         st["endpoint"]["key"] = bool(st["endpoint"].get("key"))
+        st["local_key"] = self.local_key         # not the VM's: see _local_key
         st["tunnel"] = _tunnel_view(st)
         st["log_tail"] = list(self.log)[-12:]
         st["colab"] = self.colab.snapshot()
@@ -799,6 +802,29 @@ class Control:
 
     def api_key(self):
         return self.state["endpoint"].get("key")
+
+    def _local_key(self) -> str:
+        """The key the rail offers to programs on this computer. Nothing checks it: the
+        proxy puts the box's own key in place of whatever a local client sends, so any
+        value works. It exists so that a client which insists on a key has one to paste,
+        and it stays the same from one GPU to the next (~/.collabosm/local-key)."""
+        path = os.path.join(self.state_dir, "local-key")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                key = fh.read().strip()
+            if key:
+                return key
+        except OSError:
+            pass
+        key = "sk-local-" + secrets.token_hex(12)
+        if self.persist_ledger:
+            try:
+                os.makedirs(self.state_dir, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(key + "\n")
+            except OSError:
+                pass
+        return key
 
     def reveal_key(self) -> dict:
         """The VM's key, for the person who pressed the rail's key button: to reach
@@ -1108,8 +1134,14 @@ class Control:
                 return max(fits, key=lambda r: r["vram_gb"])
         endpoint = ((ours or {}).get("endpoint") or "").lower()
         hardware = ((ours or {}).get("hardware") or "").upper()
-        if hardware == "A100" and "-hm-" not in endpoint and endpoint:
-            return next((r for r in runnable if r["vram_gb"] == 40), runnable[0])
+        if hardware == "A100" and endpoint:
+            # Colab names a High-RAM machine -hm-: that is the 80 GB card, the only one
+            # drawn with that shape; any other A100 is the standard 40 GB one. (This
+            # used to fall back to the first recipe, which was right only while the
+            # 80 GB one came first.)
+            want = ((lambda r: r.get("shape") == "hm") if "-hm-" in endpoint
+                    else (lambda r: r["vram_gb"] == 40))
+            return next((r for r in runnable if want(r)), runnable[0])
         return runnable[0]
 
     def _ensure_charge(self, ours: dict | None, server: dict | None, token=None):

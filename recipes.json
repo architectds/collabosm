@@ -1,23 +1,8 @@
 {
   "schema": 1,
-  "updated": "2026-09-26",
+  "updated": "2026-09-27",
   "about": "Which GPU runs which model, and how. scripts/recipe.py turns a recipe id into the environment scripts/up.sh launches with; the frontend lists what is here. Every number carries {v, measured, src}: measured means read on that card, anything else is an estimate and says so.",
   "gpus": [
-    {
-      "id": "a100-80g-hm",
-      "card": "A100-80G High-RAM",
-      "accelerator": "A100",
-      "shape": "hm",
-      "vram_gb": 80,
-      "ram_gb": 167,
-      "min_vram_gib": 70,
-      "cu_per_hour": 6.77,
-      "facts": {
-        "cu_per_hour": {"v": 6.77, "measured": true, "src": "Colab /tun/m/ccu-info consumptionRateHourly with this box as the account's only assignment, 2026-09-25 (older docs quote 7.52)"},
-        "vram": {"v": 79.3, "unit": "GiB", "measured": true, "src": "restore.py probe, docs/MEASURED.md"},
-        "ram": {"v": 167.1, "unit": "GiB", "measured": true, "src": "restore.py probe, docs/MEASURED.md"}
-      }
-    },
     {
       "id": "a100-40g",
       "card": "A100-40G",
@@ -31,6 +16,21 @@
         "cu_per_hour": {"v": 5.37, "measured": false, "src": "Colab UI figure, never read from ccu-info"},
         "vram": {"v": 39, "unit": "GiB", "measured": true, "src": "a 40 GB draw probes at ~39 GiB (scripts/restore.py)"},
         "ram": {"v": 83, "unit": "GiB", "measured": false, "src": "Colab's standard A100 shape; not probed here"}
+      }
+    },
+    {
+      "id": "a100-80g-hm",
+      "card": "A100-80G High-RAM",
+      "accelerator": "A100",
+      "shape": "hm",
+      "vram_gb": 80,
+      "ram_gb": 167,
+      "min_vram_gib": 70,
+      "cu_per_hour": 6.77,
+      "facts": {
+        "cu_per_hour": {"v": 6.77, "measured": true, "src": "Colab /tun/m/ccu-info consumptionRateHourly with this box as the account's only assignment, 2026-09-25 (older docs quote 7.52)"},
+        "vram": {"v": 79.3, "unit": "GiB", "measured": true, "src": "restore.py probe, docs/MEASURED.md"},
+        "ram": {"v": 167.1, "unit": "GiB", "measured": true, "src": "restore.py probe, docs/MEASURED.md"}
       }
     }
   ],
@@ -72,6 +72,35 @@
   ],
   "recipes": [
     {
+      "id": "a100-40g/qwen38-27b",
+      "gpu": "a100-40g",
+      "model": "qwen38-27b",
+      "status": "unmeasured",
+      "eta_min": 6,
+      "env": {
+        "CACHE_SIZE": 819200,
+        "CACHE_QUANT": 4,
+        "CPU_CACHE_GB": 16,
+        "RECURRENT_CACHE_GB": 16,
+        "NDT": 4,
+        "GCS": 8192,
+        "VISION": 1,
+        "YARN_FACTOR": 1.5625,
+        "CONCURRENCY": 1
+      },
+      "facts": {
+        "weights": {"v": 15.26, "unit": "GiB", "measured": true, "src": "16,384,243,706 B at branch SC_4.00bpw_H5_V6 (Hugging Face tree), embeddings, 6-bit vision tower and 4-bit MTP layer included; the pack's own plot puts this quant at KL 0.0062 vs ~0.015 for the plain 3.50 bpw it replaces"},
+        "vram_mib": {"v": 32800, "measured": false, "src": "derived: 17.1 GiB measured outside the KV on 2026-09-27 (26,746 MiB in all with Q8 KV at 262K) + Q4 KV for 819,200 tokens at 19,584 B each (16 attention layers + the MTP layer) = 14.9 GiB; not yet loaded this way"},
+        "prefill_tps": {"v": 2544, "measured": true, "src": "32,551-token cold prompt, second of a pair, on the A100-40G 2026-09-27 with Q8 KV (4K: 2,935; 119K: 1,435)"},
+        "decode_tps": {"v": 50.4, "measured": true, "src": "512 tokens at 32K context, MTP ndt 4, on the A100-40G 2026-09-27 with Q8 KV (short context: 62.9; ~128K: ~44); Q4 reads half the KV per token, so long contexts should come out a little faster"},
+        "eta_min": {"v": 6, "measured": true, "src": "billing to READY in 5 min 51 s on 2026-09-27, 43.6 s of it a warm-up since cut to ~8K tokens"},
+        "context": {"v": 409600, "measured": false, "src": "per conversation: YaRN 1.5625 over the native 262,144 (the model card documents YaRN up to 1M); the 819,200-token cache holds two such conversations, one generating at a time; quality past 262K not measured"},
+        "vision": {"v": true, "measured": false, "src": "the tower is quantized to 6 bits inside the shards (needs ExLlamaV3 >= 1.4.4; 1.5.1 here); never loaded"},
+        "concurrency": {"v": 1, "measured": true, "src": "api_server serialises requests"},
+        "host_ram": {"v": "ccs 16 + rcs 16 GiB", "measured": false, "src": "36.7 of 83.5 GiB in use on 2026-09-27; rcs is 16, not 8: a GDN checkpoint here is ~150 MB (48 layers x 48 heads x 128 x 128 fp32), one every ~2048 tokens, so an 86K-token Codex prompt leaves ~42 of them (~6 GB)"}
+      }
+    },
+    {
       "id": "a100-80g/qwen38-fn",
       "gpu": "a100-80g-hm",
       "model": "qwen38-fn",
@@ -99,35 +128,6 @@
         "vision": {"v": true, "measured": false, "src": "the pack carries vision_k6.safetensors (561 MB); its weights sit in pinned host RAM (EXL3_VISION_PINNED) so the tower costs no VRAM for weights; image encoding speed not measured"},
         "concurrency": {"v": 1, "measured": true, "src": "api_server serialises requests; how many live jobs would fit is computed in docs/CONCURRENCY.md, never exercised"},
         "host_ram": {"v": "ngr 36.4 + ccs 32 + rcs 24 GiB", "measured": false, "src": "the verified run used -ccs 16 -rcs 16"}
-      }
-    },
-    {
-      "id": "a100-40g/qwen38-27b",
-      "gpu": "a100-40g",
-      "model": "qwen38-27b",
-      "status": "unmeasured",
-      "eta_min": 6,
-      "env": {
-        "CACHE_SIZE": 262144,
-        "CACHE_QUANT": 8,
-        "CPU_CACHE_GB": 16,
-        "RECURRENT_CACHE_GB": 16,
-        "NDT": 4,
-        "GCS": 8192,
-        "VISION": 1,
-        "YARN_FACTOR": 0,
-        "CONCURRENCY": 1
-      },
-      "facts": {
-        "weights": {"v": 15.26, "unit": "GiB", "measured": true, "src": "16,384,243,706 B at branch SC_4.00bpw_H5_V6 (Hugging Face tree), embeddings, 6-bit vision tower and 4-bit MTP layer included; the pack's own plot puts this quant at KL 0.0062 vs ~0.015 for the plain 3.50 bpw it replaces"},
-        "vram_mib": {"v": 27500, "measured": false, "src": "derived: 15.3 GiB pack + ~8.5 GiB Q8 KV at 262K (16 full-attention layers x 4 KV heads x 256; the other 48 are GDN) + ~0.5 GiB for the MTP layer's KV + recurrent state and gcs 8192 staging; never loaded"},
-        "prefill_tps": {"v": null, "measured": false, "src": "never run"},
-        "decode_tps": {"v": null, "measured": false, "src": "never run"},
-        "eta_min": {"v": 6, "measured": false, "src": "16.4 GB download (~45 s at the 380 MB/s seen for the 80G pack) + install + load + a warm-up prefill at gcs 8192, never timed"},
-        "context": {"v": 262144, "measured": false, "src": "native max_position_embeddings; no YaRN in this recipe"},
-        "vision": {"v": true, "measured": false, "src": "the tower is quantized to 6 bits inside the shards (needs ExLlamaV3 >= 1.4.4; 1.5.1 here); never loaded"},
-        "concurrency": {"v": 1, "measured": true, "src": "api_server serialises requests"},
-        "host_ram": {"v": "ccs 16 + rcs 16 GiB", "measured": false, "src": "no n-gram table in this pack, so the 83 GB shape has room; rcs is 16, not 8: a GDN checkpoint here is ~150 MB (48 layers x 48 heads x 128 x 128 fp32; Flash-Next: 116 MB), one every ~2048 tokens, so an 86K-token Codex prompt leaves ~42 of them (~6 GB) and 8 GB would hold barely one session"}
       }
     }
   ]

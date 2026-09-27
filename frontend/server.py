@@ -311,7 +311,7 @@ class Handler(BaseHTTPRequestHandler):
             # and `modalities` decides whether it offers image upload at all.
             st = CONTROL.status()
             server = st.get("server") or {}
-            n_ctx = server.get("cache_max_tokens") or ARGS.ctx
+            n_ctx = webui_ctx(server, ARGS.ctx)
             vision = bool((server.get("vision") or {}).get("available"))
             name = st["live_model"] or "collabosm"
             return self._json(200, {"model_path": name, "n_ctx": n_ctx,
@@ -516,6 +516,15 @@ def main() -> int:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     httpd.serve_forever()
     return 0
+
+
+def webui_ctx(server: dict, default: int) -> int:
+    """The context the WebUI's meter shows: one conversation's ceiling. A cache larger
+    than the model's position window (native, or YaRN's) holds more conversations, not
+    a longer one -- the 27B recipe keeps two 400K conversations in an 819K cache."""
+    n_ctx = int((server or {}).get("cache_max_tokens") or default)
+    window = ((server or {}).get("context") or {}).get("max_positions")
+    return min(n_ctx, int(window)) if window else n_ctx
 
 
 def page_url(args) -> str:

@@ -156,6 +156,9 @@
     min-width: 0; overflow-x: hidden; overflow-y: auto; border-left: 1px solid var(--line);
     background: var(--bg); overscroll-behavior: contain; scrollbar-width: thin;
     scrollbar-color: var(--line) transparent;
+    /* the scrollbar's width is kept whether or not it shows, so a fold opening past
+       the bottom does not narrow the column and reflow everything in it */
+    scrollbar-gutter: stable;
   }
   section { padding: 18px 20px 20px; border-bottom: 1px solid var(--line); }
   section:last-child { border-bottom: 0; }
@@ -311,6 +314,8 @@
   .list li .ico { color: var(--muted); }
   .list li .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .list.kv li > span { color: var(--muted); white-space: nowrap; }
+  .btns2 { display: flex; gap: 8px; }
+  .btns2 .btn { flex: 1; min-width: 0; margin-top: 12px; }
   .list.kv li > b { margin-left: auto; min-width: 0; font-weight: 600; font-variant-numeric: tabular-nums;
     text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   details { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
@@ -394,7 +399,13 @@ const I18N = {
     'badge.rehearsal': 'Rehearsal · nothing billed',
     'btn.stop': 'Stop', 'btn.detach': 'Detach',
     'toggle.hide': 'Hide panel (Ctrl/⌘ B)', 'toggle.show': 'Show panel (Ctrl/⌘ B)',
-    'lang.label': 'Language', 'copied': 'Endpoint copied.',
+    'lang.label': 'Language', 'copied': 'Public address copied.',
+    'tip.local.url': 'API address for programs on this computer: {url}. Click to copy. It stays the same for every GPU.',
+    'tip.local.key': 'API key for programs on this computer. Click to copy. collabosm does not check it: it puts the real key of the GPU in its place on the way, so any key works, and this one is here to paste.',
+    'copied.local.url': 'Address copied: {url}',
+    'copied.local.key': 'Key copied. It works for every program on this computer, and it never changes.',
+    'tunnel.copy.addr': 'Copy address', 'tunnel.key.btn': 'Copy key',
+    'tunnel.remote.note': 'For another device only: the public address and the real key of this GPU. Anyone with both can use it, and your compute units, until you stop it. Both change with every GPU.',
     'tip.stop.ready': 'Stop the VM and end billing.',
     'tip.stop.job': 'Cancel the job and stop the VM it may have started.',
     'tip.stop.failed': 'Run the stop again, for a VM the failure may have left billing.',
@@ -409,7 +420,6 @@ const I18N = {
     'step.loading': 'Load', 'step.ready': 'Ready',
     'tag.adopted': 'Adopted',
     'tip.adopted': 'Taken over from outside this frontend: billed from the VM’s own uptime, and stoppable here.',
-    'tip.endpoint': 'Endpoint {url} — click to copy',
     'tip.link': 'Tunnel: /health through the tunnel, every 20 s',
     'link.ok': '{ms} ms', 'link.down': '×{n}', 'link.unknown': '…',
     'tip.idle': 'Idle stop: the VM stops itself {idle} min after the last chat request, and after {max} h in any case',
@@ -420,7 +430,6 @@ const I18N = {
     'tip.hold.err': 'Keep-alive failed: {err}',
     'tip.hold.gone': 'Colab lists no assignment for this session.',
     'tip.hold.pending': 'The first keep-alive is on its way.',
-    'tip.key.held': 'API key of this GPU — click to copy. The chat here never needs it: this app adds it to every request on the way to the GPU, so the page never holds it. Copy it only to connect from another device, together with the address beside it.',
     'copied.key': 'API key copied. With the address, anyone can use this GPU — and your compute units — until you stop it.',
     'copied.key.fail': 'Could not copy the key: this browser refused the clipboard.',
     'code.no_key': 'No key yet: the GPU is not ready.',
@@ -636,7 +645,13 @@ const I18N = {
     'badge.rehearsal': '演练 · 不计费',
     'btn.stop': '停机', 'btn.detach': '断开',
     'toggle.hide': '收起面板（Ctrl/⌘ B）', 'toggle.show': '展开面板（Ctrl/⌘ B）',
-    'lang.label': '语言', 'copied': '端点已复制。',
+    'lang.label': '语言', 'copied': '公网地址已复制。',
+    'tip.local.url': '本机程序用的 API 地址：{url}。点击复制。换 GPU 也不会变。',
+    'tip.local.key': '本机程序用的 API 密钥。点击复制。collabosm 不检查它，转发时会换成这台 GPU 的真密钥，所以填什么都行，这个只是方便你粘贴。',
+    'copied.local.url': '地址已复制：{url}',
+    'copied.local.key': '密钥已复制。本机所有程序都能用，而且不会变。',
+    'tunnel.copy.addr': '复制地址', 'tunnel.key.btn': '复制密钥',
+    'tunnel.remote.note': '仅供其他设备使用：这台 GPU 的公网地址和真密钥。拿到这两样的人都能用它（花你的计算单元），直到你停机。每次换 GPU 都会变。',
     'tip.stop.ready': '停掉 VM、结束计费。',
     'tip.stop.job': '取消任务，并停掉它可能已经起的 VM。',
     'tip.stop.failed': '再停一次，防止失败留下一台还在计费的 VM。',
@@ -651,7 +666,6 @@ const I18N = {
     'step.loading': '载入', 'step.ready': '就绪',
     'tag.adopted': '已接管',
     'tip.adopted': '接管自本前端之外：从 VM 实际启动的时间起计费，也可以在这里停机。',
-    'tip.endpoint': '端点 {url} —— 点击复制',
     'tip.link': '隧道：每 20 秒经隧道请求一次 /health',
     'link.ok': '{ms} ms', 'link.down': '×{n}', 'link.unknown': '…',
     'tip.idle': '空闲停机：最后一次对话请求后 {idle} 分钟自动停机；无论如何最长 {max} 小时',
@@ -662,7 +676,6 @@ const I18N = {
     'tip.hold.err': '保活失败：{err}',
     'tip.hold.gone': 'Colab 上已经没有这个会话的分配。',
     'tip.hold.pending': '第一次保活马上发出。',
-    'tip.key.held': '这台 GPU 的 API 密钥——点击复制。这里的聊天用不到它：本应用在把每个请求转发给 GPU 时自己加上密钥，所以网页里从不保存它。只有要从别的设备连接时才需要复制它，和旁边的地址一起用。',
     'copied.key': 'API 密钥已复制。拿到地址和密钥的人都能使用这台 GPU（花你的计算单元），直到你停机。',
     'copied.key.fail': '复制失败：浏览器拒绝访问剪贴板。',
     'code.no_key': '还没有密钥：GPU 尚未就绪。',
@@ -877,7 +890,13 @@ const I18N = {
     'badge.rehearsal': 'リハーサル・課金なし',
     'btn.stop': '停止', 'btn.detach': '切断',
     'toggle.hide': 'パネルを閉じる（Ctrl/⌘ B）', 'toggle.show': 'パネルを開く（Ctrl/⌘ B）',
-    'lang.label': '言語', 'copied': 'エンドポイントをコピーしました。',
+    'lang.label': '言語', 'copied': '公開アドレスをコピーしました。',
+    'tip.local.url': 'このコンピューターのプログラム用 API アドレス：{url}。クリックでコピー。GPU が替わっても変わりません。',
+    'tip.local.key': 'このコンピューターのプログラム用 API キー。クリックでコピー。collabosm はこれを検証せず、転送時に GPU の本物のキーに差し替えるので、どんな値でも動きます。これは貼り付け用です。',
+    'copied.local.url': 'アドレスをコピーしました：{url}',
+    'copied.local.key': 'キーをコピーしました。このコンピューターのどのプログラムでも使え、変わることはありません。',
+    'tunnel.copy.addr': 'アドレスをコピー', 'tunnel.key.btn': 'キーをコピー',
+    'tunnel.remote.note': '他の端末専用：この GPU の公開アドレスと本物のキー。両方を持つ人は、停止するまで誰でもこの GPU（とあなたのコンピューティング ユニット）を使えます。GPU が替わるたびに変わります。',
     'tip.stop.ready': 'VM を停止して課金を終えます。',
     'tip.stop.job': 'ジョブを取り消し、起動済みかもしれない VM を停止します。',
     'tip.stop.failed': 'もう一度停止します。失敗で課金中の VM が残らないように。',
@@ -892,7 +911,6 @@ const I18N = {
     'step.loading': '読込', 'step.ready': '完了',
     'tag.adopted': '引き継ぎ',
     'tip.adopted': 'このフロントエンドの外から引き継ぎました。VM の実際の起動時刻から課金を記帳し、ここで停止できます。',
-    'tip.endpoint': 'エンドポイント {url} —— クリックでコピー',
     'tip.link': 'トンネル：20 秒ごとにトンネル経由で /health を確認',
     'link.ok': '{ms} ms', 'link.down': '×{n}', 'link.unknown': '…',
     'tip.idle': 'アイドル停止：最後のチャット要求から {idle} 分で自動停止。どのみち最長 {max} 時間',
@@ -903,7 +921,6 @@ const I18N = {
     'tip.hold.err': 'キープアライブ失敗：{err}',
     'tip.hold.gone': 'Colab にこのセッションの割り当てがありません。',
     'tip.hold.pending': '最初のキープアライブをまもなく送信します。',
-    'tip.key.held': 'この GPU の API キー — クリックでコピー。ここのチャットには不要です。このアプリが GPU へ送る各リクエストに自分で付けるので、ページがキーを持つことはありません。別の端末から接続するときだけ、隣のアドレスと一緒にコピーしてください。',
     'copied.key': 'API キーをコピーしました。アドレスとキーがあれば、停止するまで誰でもこの GPU（とあなたのコンピューティング ユニット）を使えます。',
     'copied.key.fail': 'キーをコピーできませんでした。ブラウザーがクリップボードへのアクセスを拒否しました。',
     'code.no_key': 'まだキーがありません。GPU の準備ができていません。',
@@ -1537,15 +1554,15 @@ function confirmHTML(w) {
 function sessionChips() {
   const ep = st.endpoint || {}, L = st.link || {}, K = st.keepalive || {};
   let h = '<div class="chips">'
-    + '<button type="button" class="chip wide" data-act="copy" data-t="host">' + ico('link')
+    + '<button type="button" class="chip wide" data-act="copylocal" data-t="host">' + ico('link')
     + '<b class="mono" data-v="host"></b></button>'
     + chip('pulse', 'link', L.ok === false ? 'alert' : '');
   if (st.stage === 'ready') {
     h += chip('hourglass', 'idle', st.idle_policy === 'off' ? 'off' : '')
       + chip('clock', 'uptime')
       + chip(K.holding ? 'shield' : 'shieldoff', 'hold', 'only' + (K.holding ? (K.ok === false ? ' alert' : '') : ' off'))
-      + '<button type="button" class="chip only' + (ep.key ? '' : ' off') + '" data-act="copykey" data-t="key"'
-      + (ep.key ? '' : ' disabled') + '>' + ico('key') + '</button>';
+      + '<button type="button" class="chip only' + (ep.key ? '' : ' alert') + '" data-act="copylocalkey" data-t="key">'
+      + ico('key') + '</button>';
   }
   return h + '</div>';
 }
@@ -1702,6 +1719,12 @@ function tunnelHTML() {
   let h = '<ul class="list kv">' + kvRow('link', 'tunnel.addr', 'tun-host', 'mono')
     + kvRow('pulse', 'tunnel.state', 'tun-state') + kvRow('clock', 'tunnel.checked', 'tun-checked') + '</ul>'
     + '<p class="note" data-v="tun-cause"></p>';
+  if (st.stage === 'ready') {
+    // another device: the public address and the real key, each a click away
+    h += '<div class="btns2">' + btn('copy', t('tunnel.copy.addr'), '', 'link')
+      + btn('copykey', t('tunnel.key.btn'), '', 'key') + '</div>'
+      + '<p class="fine">' + esc(t('tunnel.remote.note')) + '</p>';
+  }
   if (st.stage !== 'ready') return h;           // an attached endpoint is not our box to ask
   h += '<div class="blk"><div class="sub">' + ico('server') + '<span>' + esc(t('tunnel.box')) + '</span>'
     + '<span class="tag" data-t="beat" tabindex="0">' + esc(t('tunnel.box.tag')) + '</span></div>';
@@ -1710,6 +1733,21 @@ function tunnelHTML() {
       + kvRow('plug', 'tunnel.proc', 'tun-proc') + kvRow('cloud', 'tunnel.public', 'tun-public') + '</ul>';
   }
   return h + '<p class="fine" data-v="tun-beat"></p></div>';
+}
+
+// Programs on this computer use this page's own address (the port may not be 3020)
+function localApi() { return location.origin + '/v1'; }
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (err) { /* older path */ }
+  const area = document.createElement('textarea');      // nothing is shown
+  area.value = text;
+  area.style.position = 'fixed'; area.style.opacity = '0';
+  document.body.appendChild(area); area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+  area.remove();
+  return ok;
 }
 
 function codeWord(code) {
@@ -1752,8 +1790,8 @@ function bindValues() {
   v.note = words(st.note, 'note.');
   w.bar = Math.max(0, Math.min(100, st.progress || 0));
 
-  v.host = hostOf(ep.base);
-  tips.host = t('tip.endpoint', { url: ep.base || '—' });
+  v.host = localApi().split('//')[1];
+  tips.host = t('tip.local.url', { url: localApi() });
   v.link = L.ok === true ? t('link.ok', { ms: num(L.latency_ms, 0) })
     : L.ok === false ? t('link.down', { n: L.fails || 0 }) : t('link.unknown');
   tips.link = t('tip.link');
@@ -1765,7 +1803,8 @@ function bindValues() {
   tips.hold = !K.holding ? t('tip.hold.idle')
     : K.ok === false ? (K.err === 'gone' ? t('tip.hold.gone') : t('tip.hold.err', { err: K.err || '?' }))
     : K.at ? t('tip.hold.on', { ago: ago(K.at) }) : t('tip.hold.pending');
-  tips.key = t(ep.key ? 'tip.key.held' : ep.key_pending ? 'tip.key.pending' : 'tip.key.none');
+  // the chat needs the VM key this app holds; a missing one is said on the local key's chip
+  tips.key = t('tip.local.key') + (ep.key ? '' : ' · ' + t(ep.key_pending ? 'tip.key.pending' : 'tip.key.none'));
   tips.adopted = t('tip.adopted');
 
   tips.msrc = t(mc.local ? 'tip.msrc.local' : 'tip.msrc.server', { ago: probed });
@@ -2027,6 +2066,13 @@ document.addEventListener('click', async (e) => {
       area.remove();
     }
     toast(t(done ? 'copied.key' : 'copied.key.fail'));
+    return;
+  }
+  if (act === 'copylocal' || act === 'copylocalkey') {
+    const text = act === 'copylocal' ? localApi() : (st && st.local_key) || '';
+    if (!text) return;
+    const ok = await copyText(text);
+    toast(ok ? t(act === 'copylocal' ? 'copied.local.url' : 'copied.local.key', { url: text }) : text);
     return;
   }
   if (act === 'copy') {
