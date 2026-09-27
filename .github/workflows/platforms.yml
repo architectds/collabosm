@@ -1,0 +1,42 @@
+# collabosm on Windows (no WSL), macOS and Linux: it starts, installs Google's Colab CLI and
+# loads it, rehearses a GPU start, chats through a stub engine, writes its desktop shortcut,
+# and quits. No GPU, no Google account, nothing billed -- see scripts/check_platform.py.
+name: platforms
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"      # the oldest collabosm supports
+
+      - name: WSL on this runner (expected none)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+            wsl.exe --list --quiet; "wsl.exe exit code $LASTEXITCODE"
+          } else { "no wsl.exe" }
+          exit 0
+
+      # --wsl-as-is: the runner's own answer on WSL (none), not the check's override
+      - name: Check
+        run: python scripts/check_platform.py --wsl-as-is
