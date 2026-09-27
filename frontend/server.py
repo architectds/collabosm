@@ -58,10 +58,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 UPSTREAM = os.path.join(HERE, "upstream")
+ICONS = os.path.join(HERE, "icon")
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
@@ -332,6 +334,10 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", ""):
             rel = "upstream/index.html" if "embed=1" in self.path else "shell.html"
             fs = os.path.normpath(os.path.join(HERE, rel))
+        elif path in ("/collabosm-icon.svg", "/collabosm-icon.png"):
+            # the rail's mark, for the page's tab: the WebUI's favicon.ico/svg are the
+            # WebUI's own (vendored byte for byte), and the shell used to show them
+            fs = os.path.join(ICONS, "collabosm" + path[-4:])
         elif path in ("/shell", "/shell/"):
             fs = os.path.join(HERE, "shell.html")
         else:
@@ -436,6 +442,14 @@ def main() -> int:
     ap.add_argument("--external-key", default=os.environ.get("COLLABOSM_EXTERNAL_KEY"))
     ap.add_argument("--external-model", default=None,
                     help="label to show in the rail for --external-endpoint")
+    ap.add_argument("--no-browser", action="store_true",
+                    default=os.environ.get("COLLABOSM_NO_BROWSER") == "1",
+                    help="do not open the page in the browser (a real start opens it)")
+    ap.add_argument("--browser", action="store_true",
+                    help="open the page even in a rehearsal (--mock, --fake-provision)")
+    ap.add_argument("--no-shortcut", action="store_true",
+                    default=os.environ.get("COLLABOSM_NO_SHORTCUT") == "1",
+                    help="do not put a desktop shortcut down on the first real start")
     ARGS = ap.parse_args()
     if ProvisionControl is None:
         print("!! cannot import frontend/control.py: %r" % _CONTROL_IMPORT_ERROR,
@@ -470,12 +484,69 @@ def main() -> int:
         print("!! upstream/index.html missing -- the vendored WebUI build is not here",
               file=sys.stderr)
         return 2
-    print("[fe] shell      http://%s:%d/   <- open this in your browser" % (ARGS.host, ARGS.port), flush=True)
-    print("[fe] webui      http://%s:%d/?embed=1" % (ARGS.host, ARGS.port), flush=True)
+    url = page_url(ARGS)
+    rehearsal = ARGS.mock or ARGS.fake_provision
+    if os.name == "nt":
+        try:
+            # the window the desktop shortcut opens is "collabosm" in the taskbar, not
+            # the interpreter's path: closing it is how the app is closed (README)
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleTitleW("collabosm")
+        except Exception:                                 # noqa: BLE001 - cosmetic
+            pass
+    if app_answers(url):
+        # A second start -- the desktop shortcut clicked again: the page is what was
+        # wanted, and a second server on the port would be the wrong answer
+        print("[fe] collabosm is already running at %s" % url, flush=True)
+        if wants_browser(ARGS, rehearsal):
+            webbrowser.open(url)
+        return 0
+    print("[fe] shell      %s   <- open this in your browser" % url, flush=True)
+    print("[fe] webui      %s?embed=1" % url, flush=True)
     if ARGS.backend:
         print("[fe] backend    %s (rehearsal chat)" % ARGS.backend, flush=True)
-    ThreadingHTTPServer((ARGS.host, ARGS.port), Handler).serve_forever()
+    httpd = ThreadingHTTPServer((ARGS.host, ARGS.port), Handler)
+    # bound, so the page can be asked for now; it is answered once serve_forever runs
+    if not ARGS.no_shortcut and not rehearsal and not ARGS.external_endpoint:
+        import shortcut
+        threading.Thread(target=shortcut.ensure_once, args=(CONTROL.state_dir,),
+                         kwargs={"log": lambda line: print(line, flush=True)},
+                         daemon=True).start()
+    if wants_browser(ARGS, rehearsal):
+        threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+    httpd.serve_forever()
     return 0
+
+
+def page_url(args) -> str:
+    """The page's address: a server bound to every interface is still opened on loopback."""
+    host = "127.0.0.1" if args.host in ("", "0.0.0.0", "::") else args.host
+    return "http://%s:%d/" % (host, args.port)
+
+
+def wants_browser(args, rehearsal: bool) -> bool:
+    """A real start opens the page -- that is what starting collabosm, or clicking its
+    shortcut, is for. A rehearsal does not unless --browser says so (tests start many),
+    nor does --no-browser, nor a Linux session without a display."""
+    if args.no_browser:
+        return False
+    if rehearsal and not args.browser:
+        return False
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY")
+                                                 or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+    return True
+
+
+def app_answers(url: str) -> bool:
+    """collabosm itself, already on this address: its /control/status answers, with the
+    shape only this app gives it (another program on the port is not us)."""
+    try:
+        with urllib.request.urlopen(url + "control/status", timeout=1.5) as r:
+            data = json.loads(r.read())
+        return isinstance(data, dict) and "stage" in data and "colab" in data
+    except (OSError, ValueError):
+        return False
 
 
 if __name__ == "__main__":

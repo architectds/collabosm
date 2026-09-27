@@ -342,6 +342,24 @@ near-black one, switching when the WebUI's own theme does -- and speaks **Englis
 `python frontend/server.py` (port 3020); see [frontend/UPSTREAM.md](../frontend/UPSTREAM.md) for the
 pinned upstream commit and how to rebuild it.
 
+**Starting it.**
+- **Opening the page.** A real start opens the page in the browser once the port is bound. It
+  doesn't with `--no-browser` (or `COLLABOSM_NO_BROWSER=1`), in a rehearsal unless `--browser`
+  asks, or on a Linux session without a display.
+- **Already running.** A start that finds collabosm already answering on its address opens the page
+  and exits. That is what makes double-clicking the desktop shortcut safe.
+- **The desktop shortcut.** The first real start puts one down (`frontend/shortcut.py`: a `.lnk` on
+  Windows, a small `.app` on macOS, a `.desktop` entry on Linux). The picture is the header's mark,
+  in `frontend/icon/`: an SVG, with a PNG and an ICO drawn from the same geometry.
+  `~/.collabosm/shortcut.json` remembers that it was made, so a shortcut the user deleted stays
+  deleted. `--no-shortcut` (or `COLLABOSM_NO_SHORTCUT=1`) skips it, and `python
+  frontend/shortcut.py` makes it again.
+- **The tab icon.** The page's tab shows the same mark (`/collabosm-icon.svg`). The WebUI's own
+  favicon files stay vendored as they are.
+
+For agents that install or drive collabosm there is [AGENTS.md](../AGENTS.md): the same steps, the
+control API in one table, and the rules (a GPU starts only on the user's yes).
+
 `frontend/control.py` is the real control plane behind that column. It is the only thing in the
 kit that can spend money, so it is also where the guardrails are:
 

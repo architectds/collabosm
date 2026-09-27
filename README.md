@@ -15,11 +15,13 @@ You pay Google for the GPU only while it runs. collabosm itself is free and open
 
 1. Make sure your Google account has **Colab compute units** (a paid plan, or pay-as-you-go).
 2. Install **Python 3.12 or newer**.
-3. Download collabosm, open a terminal in its folder, and run `python frontend/server.py`.
-4. Open **http://127.0.0.1:3020** and follow the **Colab** steps on the right: **Install**, then
-   **Connect Google account**.
-5. Under **GPUs** press **Start**, then **Start — billing begins**. About 11 minutes later the panel
-   says **Ready**: chat. Press **Stop** when you are done.
+3. Download collabosm, open a terminal in its folder, and run `python frontend/server.py`. The page
+   (**http://127.0.0.1:3020**) opens in your browser by itself, and a **collabosm** shortcut appears
+   on your desktop for next time.
+4. Follow the **Colab** steps on the right: **Install**, then **Connect Google account**.
+5. Under **GPUs** press **Start**, then **Start — billing begins**. A few minutes later (about 6 for
+   the A100-40G, 11 for the A100-80G) the panel says **Ready**: chat. Press **Stop** when you are
+   done.
 
 Every step is explained below.
 
@@ -35,7 +37,7 @@ Every step is explained below.
 6. [Troubleshooting](#6-troubleshooting)
 7. [Update or uninstall](#7-update-or-uninstall)
 - [Appendix](#appendix): try it without paying, what it costs, the command line, how it works and
-  your privacy, for developers
+  your privacy, for developers and AI agents
 
 ---
 
@@ -100,13 +102,20 @@ The app prints a few lines, including:
 [fe] shell      http://127.0.0.1:3020/   <- open this in your browser
 ```
 
+and opens that page in your browser by itself. If it does not (a computer without a browser, for
+example), open **http://127.0.0.1:3020** yourself.
+
+The first start also puts a **collabosm** shortcut on your desktop, with the same square-and-ring
+picture as the app's corner. From then on you can start collabosm by double-clicking it instead of
+using the terminal ([Open the app](#open-the-app)).
+
 **Leave this terminal window open** while you use collabosm: closing it closes the app. (It does
 *not* stop a GPU that is running — see [Stop the GPU](#stop-the-gpu).)
 
-### Open it
+### The page
 
-Open **http://127.0.0.1:3020** in your browser. The chat is on the left and the control panel on the
-right. The first time, the panel starts with the **Colab** section.
+The chat is on the left and the control panel on the right. The first time, the panel starts with
+the **Colab** section.
 
 ---
 
@@ -141,12 +150,20 @@ your existing sign-in.
 
 ### Open the app
 
-Each time you want to use collabosm:
-
-1. Open a terminal, go into the collabosm folder (`cd collabosm`) and run `python frontend/server.py`.
-2. Open **http://127.0.0.1:3020**.
+Each time you want to use collabosm, double-click the **collabosm** shortcut on your desktop. The
+page opens by itself. If collabosm is already running, the shortcut just opens the page again.
+(Without the shortcut: in a terminal, `cd collabosm` and `python frontend/server.py`, as the first
+time.)
 
 The first check of your Colab connection can take up to a minute.
+
+To close collabosm, close its window. Closing it does *not* stop a GPU that is running — see
+[Stop the GPU](#stop-the-gpu).
+- **Windows:** the shortcut starts it in a minimized window: **collabosm** in the taskbar.
+- **macOS:** quit **collabosm** in the Dock.
+- **Linux:** close its terminal window.
+
+Shortcut gone? `python frontend/shortcut.py` in the collabosm folder puts it back.
 
 ### Start a GPU
 
@@ -311,7 +328,9 @@ every request itself, so the page never holds it until you press the key button.
 | what you see | what to do |
 |---|---|
 | `python` is not recognised (Windows) | Python is not on PATH. Reinstall it with **"Add python.exe to PATH"** ticked, or type `py` instead of `python`. |
-| The page does not open | Is `python frontend/server.py` still running in its terminal? If another program uses port 3020, start with `python frontend/server.py --port 3021` and open http://127.0.0.1:3021. |
+| The page does not open | Is collabosm still running (its window, or `python frontend/server.py` in a terminal)? If another program uses port 3020, start with `python frontend/server.py --port 3021` and open http://127.0.0.1:3021. |
+| The page did not open by itself | Open http://127.0.0.1:3020 yourself. `--no-browser` starts collabosm without opening it. |
+| No shortcut on the desktop | Run `python frontend/shortcut.py` in the collabosm folder. |
 | "Looking for the Colab CLI…" for a while | The first check can take up to a minute, most of all on Windows with WSL. |
 | "Installing needs Python 3.12 or newer" | Install Python 3.12 or newer (see [Before you begin](#python-312-or-newer)), then press **Check again**. |
 | The install failed | Check your internet connection and press **Try again**. The panel shows the install log. |
@@ -416,8 +435,10 @@ python scripts/recipe.py list             # every GPU + model combination
 - Colab's terms: use it for yourself. Colab does not allow running a service for other people on its
   machines.
 
-### E. For developers
+### E. For developers, and for AI agents
 
+- [AGENTS.md](AGENTS.md) — installing and using collabosm, written for an AI coding agent (Codex,
+  Claude Code, …) that sets it up or drives it for you
 - [docs/DEVELOPER.md](docs/DEVELOPER.md) — how it works inside: measurements, the API, the tests
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) — operating notes and the pitfalls behind them
 - [docs/MEASURED.md](docs/MEASURED.md) and [docs/CONCURRENCY.md](docs/CONCURRENCY.md) — the numbers,

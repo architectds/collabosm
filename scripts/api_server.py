@@ -2257,11 +2257,16 @@ def warm_up():
     gcs = int(LAUNCH.get("generator_chunk_size") or 4096)
     t0 = time.time()
     try:
-        n = gcs
-        text = " ".join(str(i) for i in range(n))
+        # A little over one chunk, from words of one token each. (Numbers were five
+        # times too long: this tokenizer splits them digit by digit, and the first box
+        # warmed up on 39,850 tokens for 43.6 s instead of ~8,200.)
+        words = ("the quick brown fox jumps over a lazy dog while seven old "
+                 "wizards quietly judge the boxing match").split()
+        n = gcs + 32
+        text = " ".join(words[i % len(words)] for i in range(n))
         while TOK.encode(text).shape[-1] < gcs + 32:
-            n = int(n * 1.25) + 64
-            text = " ".join(str(i) for i in range(n))
+            n += 256
+            text = " ".join(words[i % len(words)] for i in range(n))
         r = collect(text, 8)
         print("[api] warm-up: %s-token prefill + %s tokens in %.1fs (first-use autotune paid "
               "here, not by the first request)" % (r.get("prompt_tokens"), r.get("new_tokens"),
