@@ -125,6 +125,7 @@ short prompts, the card warns). Quality past 262K is not measured yet.
 | `scripts/probe_gpu.py` | runs on the VM; reports VRAM/RAM/cc/disk as one JSON line |
 | `scripts/provision.py` | **up** (restore → upload → bootstrap → serve → wait for health), **down** (stop the VM, report what still bills), **fetch** (one small file from the VM, never `colab exec`), **sessions** -- the same on Windows, macOS, Linux and WSL |
 | `scripts/colab_cmd.py` | the Colab CLI (`colab ...`) on any machine: on Windows it stands in for the two Unix-only modules its console imports |
+| `scripts/check_platform.py` | what CI (`.github/workflows/platforms.yml`) runs on Windows without WSL, macOS and Linux, and what anyone can run here: the app starts for real, installs and loads the Colab CLI, rehearses a GPU start to ready and stop, chats through a stub engine in both dialects, writes its shortcut and quits. A throwaway home folder, no GPU, no Google account |
 | `scripts/up.sh`, `scripts/down.sh` | one-line shims onto `provision.py up` / `down`, so the old commands keep working |
 | `scripts/bootstrap.sh` | runtime (pinned wheel) + weights (from HF at a pinned revision), idempotent |
 | `scripts/serve.sh` | launch the API + cloudflared tunnel (runs on the VM) |
@@ -363,6 +364,19 @@ pinned upstream commit and how to rebuild it.
   `~/.collabosm/shortcut.json` remembers that it was made, so a shortcut the user deleted stays
   deleted. `--no-shortcut` (or `COLLABOSM_NO_SHORTCUT=1`) skips it, and `python
   frontend/shortcut.py` makes it again.
+- **No window on Windows.** The `.lnk` runs `pythonw.exe`, which has no console. `server.py` sees
+  that (`sys.stdout is None`) and starts itself again as `python.exe` with `CREATE_NO_WINDOW`
+  (`run_windowless`). That process keeps a console nobody sees, which the `wsl.exe` and PowerShell
+  calls it makes share, so none of them flashes a window; under `pythonw` each would open its own.
+  Its output goes to `~/.collabosm/server.log`, the macOS app's log too, and the previous start's
+  is kept as `server.log.1`. A shortcut made before this ran `python.exe` in a minimized window;
+  `shortcut.json` carries a version, and an old shortcut that is still on the desktop is rewritten
+  once. Started from a terminal, the app keeps that terminal as before.
+- **Closing it.** The header's Quit (⏻) sends `POST /control/quit`: the server answers, stops
+  serving and exits. A running GPU is not stopped; the page says so before it quits. Routine GETs
+  (the page's status poll every 1.5 s, the WebUI's service-worker check every minute) are not
+  logged, and neither is a client dropping a kept-alive connection: the log keeps POSTs and
+  failures.
 - **The tab icon.** The page's tab shows the same mark (`/collabosm-icon.svg`). The WebUI's own
   favicon files stay vendored as they are.
 

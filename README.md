@@ -1,9 +1,11 @@
 # collabosm — user guide
 
-collabosm lets you use a large AI model, **Qwen3.8-Flash-Next**, running on a powerful GPU that is
-rented in **your own Google Colab account**. You chat with it in a simple app on your computer,
-start and stop the GPU with a button, and see the price before you pay. Other programs, such as
-Codex or Open WebUI, can use the same model.
+[![platforms](https://github.com/architectds/collabosm/actions/workflows/platforms.yml/badge.svg)](https://github.com/architectds/collabosm/actions/workflows/platforms.yml)
+
+collabosm lets you use a large AI model — **Qwen3.8-27B**, or **Qwen3.8-Flash-Next** — running on
+a powerful GPU that is rented in **your own Google Colab account**. You chat with it in a simple
+app on your computer, start and stop the GPU with a button, and see the price before you pay.
+Other programs, such as Codex or ModelDock, can use the same model.
 
 ![The collabosm app: the chat on the left, the control panel on the right](docs/images/first-launch.png)
 
@@ -109,8 +111,9 @@ The first start also puts a **collabosm** shortcut on your desktop, with the sam
 picture as the app's corner. From then on you can start collabosm by double-clicking it instead of
 using the terminal ([Open the app](#open-the-app)).
 
-**Leave this terminal window open** while you use collabosm: closing it closes the app. (It does
-*not* stop a GPU that is running — see [Stop the GPU](#stop-the-gpu).)
+**Leave this terminal window open** while you use collabosm: closing it closes the app, and so does
+the **Quit** button (⏻) at the top right of the page. Neither stops a GPU that is running — see
+[Stop the GPU](#stop-the-gpu).
 
 ### The page
 
@@ -157,11 +160,12 @@ time.)
 
 The first check of your Colab connection can take up to a minute.
 
-To close collabosm, close its window. Closing it does *not* stop a GPU that is running — see
-[Stop the GPU](#stop-the-gpu).
-- **Windows:** the shortcut starts it in a minimized window: **collabosm** in the taskbar.
-- **macOS:** quit **collabosm** in the Dock.
-- **Linux:** close its terminal window.
+To close collabosm, press **Quit** (⏻) at the top right of the page. Closing it does *not* stop a
+GPU that is running — see [Stop the GPU](#stop-the-gpu); the page warns you first.
+- **Windows:** the shortcut starts it with no window at all. Quit is how it closes (or end
+  **Python** in Task Manager). What it writes goes to `.collabosm\server.log` in your home folder.
+- **macOS:** Quit, or quit **collabosm** in the Dock.
+- **Linux:** Quit, or close its terminal window.
 
 Shortcut gone? `python frontend/shortcut.py` in the collabosm folder puts it back.
 
@@ -195,8 +199,8 @@ Type in the message box on the left and press Enter. The answer appears as it is
 **The GPU costs money every minute it runs, even while you are not chatting.**
 
 - When you are done, press **Stop** in the top bar. (It is there while a GPU is running.)
-- **Closing the browser, or the app's terminal window, does not stop the GPU.** If that happens,
-  start the app again: it finds the GPU that is still running and offers **Stop**.
+- **Closing the browser, or quitting the app, does not stop the GPU.** If that happens, start the
+  app again: it finds the GPU that is still running and offers **Stop**.
 - Safety nets, in case you forget: collabosm stops the GPU by itself **20 minutes after the last
   message**, after **6 hours** in any case, and whenever a start fails.
 - While you are chatting, collabosm tells Colab the GPU is in use, so Colab does not take it away for
@@ -329,7 +333,7 @@ request itself, so the page never holds it until you press **Copy key**.)
 | what you see | what to do |
 |---|---|
 | `python` is not recognised (Windows) | Python is not on PATH. Reinstall it with **"Add python.exe to PATH"** ticked, or type `py` instead of `python`. |
-| The page does not open | Is collabosm still running (its window, or `python frontend/server.py` in a terminal)? If another program uses port 3020, start with `python frontend/server.py --port 3021` and open http://127.0.0.1:3021. |
+| The page does not open | Start collabosm again (its shortcut, or `python frontend/server.py` in a terminal): if it is running, that only opens the page. On Windows, what went wrong is in `.collabosm\server.log` in your home folder. If another program uses port 3020, start with `python frontend/server.py --port 3021` and open http://127.0.0.1:3021. |
 | The page did not open by itself | Open http://127.0.0.1:3020 yourself. `--no-browser` starts collabosm without opening it. |
 | No shortcut on the desktop | Run `python frontend/shortcut.py` in the collabosm folder. |
 | "Looking for the Colab CLI…" for a while | The first check can take up to a minute, most of all on Windows with WSL. |
@@ -359,8 +363,7 @@ small collabosm app and your browser.
 
 ### Update
 
-1. Press **Stop** if a GPU is running, then close the app (Ctrl+C in its terminal, or close the
-   window).
+1. Press **Stop** if a GPU is running, then **Quit** (⏻) at the top right of the page.
 2. With git: run `git pull` in the collabosm folder. Without git: download the ZIP again and replace
    the folder.
 3. Start the app again.

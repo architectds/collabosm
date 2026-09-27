@@ -16,6 +16,7 @@ Routes
     /control/couple         find the running service on our session and attach to it
     /control/key            the VM's key, for the rail's copy button (never in /control/status)
     /control/colab/<act>    the Colab guide: install | connect | cancel | check | disconnect
+    /control/quit           close this app (the page's Quit; a running GPU is not stopped)
     /v1/*  /props  /slots  /tools  /models/*  /cors-proxy
                             proxied to the tunnel (key injected), or in a rehearsal to --backend,
                             with the model field rewritten
@@ -52,6 +53,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -185,7 +187,19 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "collabosm-frontend"
 
     def log_message(self, fmt, *a):
-        sys.stderr.write("[fe] " + (fmt % a) + "\n")
+        if sys.stderr is not None:                        # pythonw.exe has none
+            sys.stderr.write("[fe] " + (fmt % a) + "\n")
+
+    def log_request(self, code="-", size="-"):
+        # The page asks for /control/status every 1.5 s and the WebUI checks its service
+        # worker every minute: a line for each buried everything else. Kept: every POST
+        # (a start, a stop, a chat) and anything that failed.
+        try:
+            quiet = self.command in ("GET", "HEAD") and int(code) < 400
+        except (TypeError, ValueError):
+            quiet = False
+        if not quiet:
+            super().log_request(code, size)
 
     # -- helpers -----------------------------------------------------------
     def _json(self, code, obj):
@@ -381,6 +395,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, CONTROL.cancel())
         if path == "/control/stop":
             return self._json(200, CONTROL.stop("manual"))
+        if path == "/control/quit":
+            # The page's Quit -- the only close button a windowless start has. Answer
+            # first, then stop serving (from another thread: shutdown() waits for the
+            # serving loop). A running GPU is the page's to warn about; it is not stopped.
+            self.log_message("quit from the page")
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return self._json(200, {"ok": True, "code": "quitting"})
         if path == "/control/key":
             # only on a click, only same-origin JSON (the POST guard above): a foreign page
             # can neither send this nor read the answer
@@ -405,6 +426,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.log_message("model rewrite skipped: %r", e)
             return self._proxy(raw)
         return self._json(404, {"error": {"message": "no such route", "path": path}})
+
+
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # A browser that drops a kept-alive connection (a closed tab, a reload) is not
+        # an error; a traceback for each one buried the log. Everything else still is.
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
 
 
 def main() -> int:
@@ -451,6 +481,9 @@ def main() -> int:
                     default=os.environ.get("COLLABOSM_NO_SHORTCUT") == "1",
                     help="do not put a desktop shortcut down on the first real start")
     ARGS = ap.parse_args()
+    if os.name == "nt" and sys.stdout is None:
+        # pythonw.exe -- the desktop shortcut: the server runs windowless (run_windowless)
+        return run_windowless(ARGS)
     if ProvisionControl is None:
         print("!! cannot import frontend/control.py: %r" % _CONTROL_IMPORT_ERROR,
               file=sys.stderr)
@@ -488,8 +521,8 @@ def main() -> int:
     rehearsal = ARGS.mock or ARGS.fake_provision
     if os.name == "nt":
         try:
-            # the window the desktop shortcut opens is "collabosm" in the taskbar, not
-            # the interpreter's path: closing it is how the app is closed (README)
+            # started from a terminal, its window is "collabosm" in the taskbar, not the
+            # interpreter's path (the desktop shortcut's start has no window at all)
             import ctypes
             ctypes.windll.kernel32.SetConsoleTitleW("collabosm")
         except Exception:                                 # noqa: BLE001 - cosmetic
@@ -505,7 +538,7 @@ def main() -> int:
     print("[fe] webui      %s?embed=1" % url, flush=True)
     if ARGS.backend:
         print("[fe] backend    %s (rehearsal chat)" % ARGS.backend, flush=True)
-    httpd = ThreadingHTTPServer((ARGS.host, ARGS.port), Handler)
+    httpd = Server((ARGS.host, ARGS.port), Handler)
     # bound, so the page can be asked for now; it is answered once serve_forever runs
     if not ARGS.no_shortcut and not rehearsal and not ARGS.external_endpoint:
         import shortcut
@@ -514,7 +547,43 @@ def main() -> int:
                          daemon=True).start()
     if wants_browser(ARGS, rehearsal):
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
-    httpd.serve_forever()
+    httpd.serve_forever()                  # returns only for the page's Quit
+    httpd.server_close()
+    print("[fe] closed from the page (Quit)", flush=True)
+    return 0
+
+
+def run_windowless(args) -> int:
+    """Windows, started by pythonw.exe -- what the desktop shortcut runs: no console,
+    and so no window, which is the point. The server is started from here as python.exe
+    with CREATE_NO_WINDOW. It keeps a console nobody sees, and the wsl.exe and
+    PowerShell calls it makes share that console, so none of them flashes a window
+    (under pythonw each would open its own). Its output goes to server.log in the state
+    folder, as the macOS app's does; the previous start's is kept as server.log.1. It is
+    closed from the page (Quit), or in Task Manager. A second start while it runs only
+    opens the page."""
+    url = page_url(args)
+    if app_answers(url):
+        if wants_browser(args, args.mock or args.fake_provision):
+            webbrowser.open(url)
+        return 0
+    state = args.state_dir or os.path.join(os.path.expanduser("~"), ".collabosm")
+    os.makedirs(state, exist_ok=True)
+    log = os.path.join(state, "server.log")
+    try:
+        if os.path.exists(log):
+            os.replace(log, log + ".1")
+    except OSError:
+        pass                                   # still held open somewhere: append to it
+    exe = os.path.join(os.path.dirname(sys.executable), "python.exe")
+    if not os.path.exists(exe):
+        exe = sys.executable
+    with open(log, "a", encoding="utf-8") as out:
+        subprocess.Popen([exe, os.path.abspath(__file__)] + sys.argv[1:],
+                         cwd=os.path.dirname(HERE), stdin=subprocess.DEVNULL,
+                         stdout=out, stderr=subprocess.STDOUT,
+                         env=dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8"),
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
     return 0
 
 

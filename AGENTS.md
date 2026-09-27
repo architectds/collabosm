@@ -41,7 +41,8 @@ python frontend/server.py --no-browser
 - Leave out `--no-browser` when the user should see the page: a normal start opens it in their
   browser.
 - The first normal start also puts a desktop shortcut down. `--no-shortcut` skips that, and
-  `python frontend/shortcut.py` makes it again.
+  `python frontend/shortcut.py` makes it again. On Windows the shortcut starts the app with no
+  window; its output then goes to `~/.collabosm/server.log`.
 
 Then the one-time Colab setup, in the page's **Colab** section or through the API below:
 1. `install`: puts Google's Colab CLI into collabosm's own folder.
@@ -62,6 +63,7 @@ least `{}`, and must not carry another site's `Origin` header; a command-line cl
 | `POST /control/cancel` | withdraws a pending confirmation; nothing was started |
 | `POST /control/stop` | stops the GPU, and its billing |
 | `POST /control/couple` | reconnects to the running GPU, for example after its tunnel changed |
+| `POST /control/quit` | closes the app itself. A running GPU is **not** stopped: stop it first (rule 2) |
 
 - A recipe is a card plus a model. They are listed under `recipes` in the status, or by
   `python scripts/recipe.py list`.

@@ -6,8 +6,9 @@ command makes it again. The shortcut runs this interpreter on frontend/server.py
 which opens http://127.0.0.1:3020 in the browser -- or, when collabosm is already
 running, only opens the page. Its picture is the rail's mark (frontend/icon/).
 
-- Windows: collabosm.lnk on the desktop. It opens a console window, minimized;
-  closing that window stops collabosm.
+- Windows: collabosm.lnk on the desktop. It starts collabosm with no window
+  (pythonw.exe; server.py then runs itself windowless). Its output goes to
+  ~/.collabosm/server.log, and the page's Quit button closes it.
 - macOS: collabosm.app on the desktop. Quit it from the Dock. Its output goes to
   ~/.collabosm/server.log.
 - Linux: collabosm.desktop in the applications menu and on the desktop. It runs
@@ -56,8 +57,8 @@ def desktop_dir() -> str:
 
 
 def python_exe() -> str:
-    """This interpreter -- on Windows python.exe, not pythonw.exe, so that there is a
-    window to close."""
+    """This interpreter, as the console python.exe on Windows (a pythonw.exe that
+    started this is swapped for the python.exe beside it)."""
     exe = sys.executable
     if os.name == "nt" and os.path.basename(exe).lower() == "pythonw.exe":
         console = os.path.join(os.path.dirname(exe), "python.exe")
@@ -66,11 +67,20 @@ def python_exe() -> str:
     return exe
 
 
+def windowless_exe() -> str:
+    """What the Windows shortcut runs: the pythonw.exe beside this interpreter, which
+    has no console window (server.py then starts itself windowless: run_windowless).
+    python.exe where there is none, which shows a window as before."""
+    exe = python_exe()
+    quiet = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    return quiet if os.path.exists(quiet) else exe
+
+
 def create_windows(desktop: str) -> str:
     """A .lnk, written by Windows' own WScript.Shell; every path goes in through the
     environment, so no quoting of it can go wrong."""
     path = os.path.join(desktop, NAME + ".lnk")
-    env = dict(os.environ, CO_LNK=path, CO_PY=python_exe(), CO_ARGS='"%s"' % SERVER,
+    env = dict(os.environ, CO_LNK=path, CO_PY=windowless_exe(), CO_ARGS='"%s"' % SERVER,
                CO_DIR=ROOT, CO_ICON=os.path.join(ICONS, "collabosm.ico") + ",0", CO_DESC=BLURB)
     script = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:CO_LNK); "
               "$s.TargetPath = $env:CO_PY; $s.Arguments = $env:CO_ARGS; "
@@ -176,25 +186,45 @@ def create(desktop=None) -> str:
     return create_linux(desktop)
 
 
+# 2: the Windows shortcut runs pythonw.exe (no window). A shortcut made before that
+# is rewritten once, if it is still there; one the user deleted stays deleted.
+VERSION = 2
+
+
 def ensure_once(state_dir: str, log=print, desktop=None):
     """frontend/server.py's first real start: make the shortcut once, and remember that
     it was made, so that one the user deleted is not put back. Never raises."""
     marker = os.path.join(state_dir, MARKER)
+    old = None
     if os.path.exists(marker):
+        try:
+            with open(marker, encoding="utf-8") as fh:
+                old = json.load(fh)
+        except (OSError, ValueError):
+            old = {}
+        if not isinstance(old, dict) or old.get("v", 1) >= VERSION:
+            return None
+    if old is not None and not (os.name == "nt" and os.path.exists(old.get("path") or "")):
+        _mark(marker, dict(old, v=VERSION))               # nothing of the old kind is left
         return None
     try:
         path = create(desktop)
     except Exception as exc:                              # noqa: BLE001 - never stops the app
         log("[fe] shortcut   not made: %s (python frontend/shortcut.py tries again)" % exc)
         return None
+    _mark(marker, {"path": path, "at": int(time.time()), "v": VERSION})
+    log("[fe] shortcut   %s (%s; python frontend/shortcut.py makes it again)"
+        % (path, "made once" if old is None else "now starts collabosm without a window"))
+    return path
+
+
+def _mark(marker: str, data: dict) -> None:
     try:
-        os.makedirs(state_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
         with open(marker, "w", encoding="utf-8") as fh:
-            json.dump({"path": path, "at": int(time.time())}, fh)
+            json.dump(data, fh)
     except OSError:
         pass
-    log("[fe] shortcut   %s (made once; python frontend/shortcut.py makes it again)" % path)
-    return path
 
 
 if __name__ == "__main__":

@@ -79,6 +79,8 @@
   .brand { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
   .mark { width: 20px; height: 20px; border-radius: 6px; background: var(--fg); display: grid; place-items: center; flex: none; }
   .mark::after { content: ""; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--bg); }
+  .closed { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 0 16px; text-align: center; color: var(--muted); font-size: 14px; }
   .status {
     display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 42vw; height: 28px;
     padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 12.5px;
@@ -365,6 +367,9 @@
   <button type="button" class="icon-btn" id="toggle">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M10 2.5v11"/></svg>
   </button>
+  <button type="button" class="icon-btn" id="quit" data-act="quit">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 1.75v5.5"/><path d="M4.6 3.9a5.25 5.25 0 1 0 6.8 0"/></svg>
+  </button>
 </header>
 <main id="main">
   <iframe id="ui" src="/?embed=1" title="collabosm chat" allow="clipboard-write; clipboard-read"></iframe>
@@ -401,6 +406,10 @@ const I18N = {
     'badge.rehearsal': 'Rehearsal · nothing billed',
     'btn.stop': 'Stop', 'btn.detach': 'Detach',
     'toggle.hide': 'Hide panel (Ctrl/⌘ B)', 'toggle.show': 'Show panel (Ctrl/⌘ B)',
+    'quit.label': 'Quit collabosm',
+    'quit.confirm': 'Quit collabosm? Start it again from its desktop shortcut.',
+    'quit.confirm.gpu': 'A GPU is still running. Quitting collabosm does not stop it: it keeps billing until Colab takes it back, about 20 minutes after it was last used. Quit anyway?',
+    'quit.done': 'collabosm is closed. Start it again from its desktop shortcut.',
     'lang.label': 'Language', 'copied': 'Public address copied.',
     'tip.local.url': 'API address for programs on this computer: {url}. Click to copy. It stays the same for every GPU.',
     'tip.local.key': 'API key for programs on this computer. Click to copy. collabosm does not check it: it puts the real key of the GPU in its place on the way, so any key works, and this one is here to paste.',
@@ -648,6 +657,10 @@ const I18N = {
     'badge.rehearsal': '演练 · 不计费',
     'btn.stop': '停机', 'btn.detach': '断开',
     'toggle.hide': '收起面板（Ctrl/⌘ B）', 'toggle.show': '展开面板（Ctrl/⌘ B）',
+    'quit.label': '退出 collabosm',
+    'quit.confirm': '要退出 collabosm 吗？之后可以用桌面快捷方式再打开。',
+    'quit.confirm.gpu': '还有一台 GPU 在运行。退出 collabosm 不会停掉它：它会继续计费，直到它闲置约 20 分钟后被 Colab 收回。仍要退出吗？',
+    'quit.done': 'collabosm 已退出。用桌面快捷方式可以再打开。',
     'lang.label': '语言', 'copied': '公网地址已复制。',
     'tip.local.url': '本机程序用的 API 地址：{url}。点击复制。换 GPU 也不会变。',
     'tip.local.key': '本机程序用的 API 密钥。点击复制。collabosm 不检查它，转发时会换成这台 GPU 的真密钥，所以填什么都行，这个只是方便你粘贴。',
@@ -894,6 +907,10 @@ const I18N = {
     'badge.rehearsal': 'リハーサル・課金なし',
     'btn.stop': '停止', 'btn.detach': '切断',
     'toggle.hide': 'パネルを閉じる（Ctrl/⌘ B）', 'toggle.show': 'パネルを開く（Ctrl/⌘ B）',
+    'quit.label': 'collabosm を終了',
+    'quit.confirm': 'collabosm を終了しますか？デスクトップのショートカットからまた起動できます。',
+    'quit.confirm.gpu': 'GPU がまだ動いています。collabosm を終了しても GPU は止まらず、最後に使ってから約 20 分後に Colab が回収するまで課金が続きます。それでも終了しますか？',
+    'quit.done': 'collabosm を終了しました。デスクトップのショートカットからまた起動できます。',
     'lang.label': '言語', 'copied': '公開アドレスをコピーしました。',
     'tip.local.url': 'このコンピューターのプログラム用 API アドレス：{url}。クリックでコピー。GPU が替わっても変わりません。',
     'tip.local.key': 'このコンピューターのプログラム用 API キー。クリックでコピー。collabosm はこれを検証せず、転送時に GPU の本物のキーに差し替えるので、どんな値でも動きます。これは貼り付け用です。',
@@ -1208,6 +1225,7 @@ let lang = pickLang();
 let st = null;          // the last /control/status
 let down = null;        // why the control plane could not be read, when it could not
 let pending = false;    // a POST is in flight: every action waits for it (Start bills)
+let gone = false;       // the app was quit from this page: nothing is left to ask
 const drawn = {};       // section id -> markup it holds; unchanged sections are left alone,
                         // so buttons keep focus and <details> stay open between polls
 const openDetails = new Set();
@@ -1517,6 +1535,9 @@ function renderHeader() {
   $('toggle').title = t(collapsed ? 'toggle.show' : 'toggle.hide');
   $('toggle').setAttribute('aria-label', $('toggle').title);
   $('toggle').setAttribute('aria-expanded', String(!collapsed));
+  $('quit').title = t('quit.label');
+  $('quit').setAttribute('aria-label', $('quit').title);
+  $('quit').disabled = pending;
 }
 
 // ---- status: session, note, machine, compute units ------------------------ //
@@ -1933,6 +1954,7 @@ function bindValues() {
 }
 
 function render() {
+  if (gone) return;
   renderHeader();
   if (!st) return;
   put('f-colab', foldHTML('colab', 'compass', t('sec.colab'), colabHTML, colabStep() < 3));
@@ -1985,7 +2007,18 @@ document.addEventListener('focusout', hideTip);
 $('rail').addEventListener('scroll', hideTip, { passive: true });
 
 // ---- talking to the control plane ------------------------------------------------ //
+// After Quit: a page that goes on polling a closed port would only show errors
+function closed() {
+  gone = true;
+  clearInterval(poller);
+  hideTip();
+  document.body.innerHTML = '<div class="closed"><span class="mark" aria-hidden="true"></span><p>'
+    + esc(t('quit.done')) + '</p></div>';
+  document.title = 'collabosm';
+}
+
 async function refresh() {
+  if (gone) return;
   try {
     const r = await fetch('/control/status', { cache: 'no-store' });
     st = await r.json();
@@ -2097,6 +2130,15 @@ document.addEventListener('click', async (e) => {
     if (what === 'disconnect' && !confirm(t('colab.disconnect.confirm'))) return;
     return say(await post('/control/colab/' + what, {}));
   }
+  if (act === 'quit') {
+    // the app may have no window of its own (the Windows shortcut starts it without
+    // one), so this is how it closes; a GPU it leaves running goes on billing
+    const billing = !!(st && stoppable(st) && st.stage !== 'attached');
+    if (!confirm(t(billing ? 'quit.confirm.gpu' : 'quit.confirm'))) return;
+    const r = await post('/control/quit', {});
+    if (r && r.code === 'quitting') return closed();
+    return say(r);
+  }
   if (act === 'pick') {
     const r = await post('/control/select', { recipe: b.dataset.r });
     if (r && r.code === 'colab_setup') {     // the guide is where the next step is
@@ -2166,7 +2208,7 @@ $('ui').addEventListener('load', () => {
 if (innerWidth < 900) $('main').classList.add('collapsed');
 setLang(lang);
 refresh();
-setInterval(refresh, 1500);
+const poller = setInterval(refresh, 1500);
 </script>
 </body>
 </html>
