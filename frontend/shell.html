@@ -492,6 +492,7 @@ const I18N = {
     'fact.vision': 'Vision', 'fact.concurrency': 'Parallel', 'fact.vram_mib': 'VRAM',
     'fact.weights': 'Weights', 'fact.load_s': 'Load', 'fact.eta_min': 'Ready in',
     'fact.measured': 'Measured: {src}', 'fact.estimate': 'Not measured: {src}',
+    'fact.none': 'Not recorded for this recipe yet',
     'tag.current': 'Current', 'recipe.pick': 'Start', 'recipe.running': 'Running', 'recipe.na': 'Not runnable',
     'vision.on': 'on', 'vision.off': 'off',
     'sec.speed': 'Speed', 'speed.live': 'live', 'speed.ref': 'reference',
@@ -743,6 +744,7 @@ const I18N = {
     'fact.vision': '视觉', 'fact.concurrency': '并发', 'fact.vram_mib': '显存',
     'fact.weights': '权重', 'fact.load_s': '载入', 'fact.eta_min': '就绪用时',
     'fact.measured': '实测：{src}', 'fact.estimate': '未实测：{src}',
+    'fact.none': '这个配方还没有记录这一项',
     'tag.current': '当前', 'recipe.pick': '启动', 'recipe.running': '运行中', 'recipe.na': '不可运行',
     'vision.on': '开', 'vision.off': '关',
     'sec.speed': '速度', 'speed.live': '实测', 'speed.ref': '参考',
@@ -993,6 +995,7 @@ const I18N = {
     'fact.vision': 'ビジョン', 'fact.concurrency': '並列', 'fact.vram_mib': 'VRAM',
     'fact.weights': '重み', 'fact.load_s': 'ロード', 'fact.eta_min': '準備完了まで',
     'fact.measured': '実測：{src}', 'fact.estimate': '未実測：{src}',
+    'fact.none': 'このレシピにはまだ記録がありません',
     'tag.current': '選択中', 'recipe.pick': '起動', 'recipe.running': '稼働中', 'recipe.na': '実行不可',
     'vision.on': 'オン', 'vision.off': 'オフ',
     'sec.speed': '速度', 'speed.live': '実測', 'speed.ref': '参考値',
@@ -1655,8 +1658,14 @@ function statusHTML() {
 
 // ---- GPUs --------------------------------------------------------------------- //
 function factsHTML(r) {
-  const rows = FACT_ORDER.filter((k) => fact(r, k)).map((k) => {
+  if (!r) return '';
+  // every card lists the same rows in the same order; a fact a recipe lacks reads "—"
+  const rows = FACT_ORDER.map((k) => {
     const f = fact(r, k);
+    if (!f) {
+      return '<li class="est" data-tip="' + esc(t('fact.none')) + '" tabindex="0">' + ico('dashed', 'est')
+        + '<span>' + esc(t('fact.' + k)) + '</span><b>—</b></li>';
+    }
     const tip = t(f.measured ? 'fact.measured' : 'fact.estimate', { src: f.src || '—' });
     return '<li class="' + (f.measured ? '' : 'est') + '" data-tip="' + esc(tip) + '" tabindex="0">'
       + ico(f.measured ? 'okc' : 'dashed', f.measured ? '' : 'est')
@@ -1681,9 +1690,12 @@ function gpuHTML(g, locked) {
     + '</div>';
   if (list.length) {
     h += '<label class="pick">' + ico('box', 'l')
-      + '<select data-gpu="' + esc(g.id) + '" aria-label="' + esc(t('model.label') + ' · ' + g.card) + '">'
+      + '<select data-gpu="' + esc(g.id) + '" aria-label="' + esc(t('model.label') + ' · ' + g.card) + '"'
+      // a short label per option (the menu stays inside the card); the whole description on hover
+      + (r ? ' title="' + esc(r.model + ' · ' + (r.quant || '') + ' — ' + t('status.' + r.status, null, r.status)) + '"' : '')
+      + '>'
       + list.map((x) => '<option value="' + esc(x.id) + '"' + (r && x.id === r.id ? ' selected' : '') + '>'
-        + esc(x.model + ' · ' + (x.quant || '') + ' — ' + t('status.' + x.status, null, x.status)) + '</option>').join('')
+        + esc(x.model + ' · ' + (x.short || x.quant || '')) + '</option>').join('')
       + '</select>' + ico('chevron', 'r') + '</label>';
   }
   if (r) h += factsHTML(r);

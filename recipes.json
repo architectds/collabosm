@@ -38,6 +38,7 @@
     {
       "id": "qwen38-fn",
       "name": "Qwen3.8-Flash-Next",
+      "short": "EXL3 4-bit",
       "params": "125B-A6B MoE",
       "quant": "EXL3 4.05 bpw",
       "repo": "turboderp/Qwen3.8-Flash-Next-exl3",
@@ -55,6 +56,7 @@
     {
       "id": "qwen38-27b",
       "name": "Qwen3.8-27B",
+      "short": "EXL3 4-bit",
       "params": "27B dense, hybrid DeltaNet",
       "quant": "EXL3 4.00 bpw, self-calibrated (head 5, vision 6 bits)",
       "repo": "turboderp/Qwen3.8-27B-exl3",
@@ -72,6 +74,7 @@
     {
       "id": "qwen38-fn-strata",
       "name": "Qwen3.8-Flash-Next",
+      "short": "Strata 3.5-bit",
       "params": "125B-A6B MoE",
       "quant": "GGUF IQ3_S, 3.50 bpw (ISTA-DASLab GSQ-RCO), on Strata",
       "engine": "strata",
@@ -145,6 +148,7 @@
         "CONCURRENCY": 1
       },
       "facts": {
+        "weights": {"v": 100.1, "unit": "GiB", "measured": true, "src": "107,463,600,896 B at branch 4.05bpw_h6_ng6 (Hugging Face tree): the 4.05 bpw weights with the 36.36 GiB n-gram table (host RAM, -ngr) and the 6-bit vision tower (561 MB)"},
         "prefill_tps": {"v": 3882, "measured": true, "src": "gcs sweep at 8192, docs/MEASURED.md (2,806 at gcs 2048)"},
         "decode_tps": {"v": 97.4, "measured": true, "src": "MTP ndt 4 at a 30K context, docs/MEASURED.md"},
         "load_s": {"v": 259.5, "measured": true, "src": "serve.sh at cache 500224, docs/MEASURED.md"},

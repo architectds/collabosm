@@ -73,6 +73,9 @@ def validate(reg: dict) -> list:
         for k in ("name", "repo", "revision", "dir", "served_id"):
             if not m.get(k):
                 out.append("model %s: no %s" % (m.get("id"), k))
+        # the recipe menu shows "<name> · <short>": a few words, or it overflows the card
+        if len(m.get("short") or "") > 24:
+            out.append("model %s: short is over 24 characters" % m.get("id"))
         if m.get("engine", "exl3") not in ENGINES:
             out.append("model %s: engine must be one of %s" % (m.get("id"), "/".join(ENGINES)))
         if m.get("engine") == "strata":
@@ -174,7 +177,8 @@ def flat(reg: dict) -> list:
             "shape": g["shape"], "cu_per_hour": g["cu_per_hour"],
             "vram_gb": g["vram_gb"], "ram_gb": g.get("ram_gb"),
             "model_id": m["id"], "model": m["name"], "params": m.get("params"),
-            "quant": m.get("quant"), "served_id": m["served_id"],
+            "quant": m.get("quant"), "short": m.get("short") or (m.get("quant") or "").split(",")[0],
+            "served_id": m["served_id"],
             "eta_min": r.get("eta_min"), "env": launch_env(reg, r["id"]),
             "facts": facts(reg, r["id"]), "why": r.get("why") or {},
         })
