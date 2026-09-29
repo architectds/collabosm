@@ -397,11 +397,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, CONTROL.stop("manual"))
         if path == "/control/quit":
             # The page's Quit -- the only close button a windowless start has. Answer
-            # first, then stop serving (from another thread: shutdown() waits for the
-            # serving loop). A running GPU is the page's to warn about; it is not stopped.
+            # first -- the whole answer is written before anything stops, or the
+            # process can end mid-reply (Linux CI read 0 of its 32 bytes) -- then stop
+            # serving (from another thread: shutdown() waits for the serving loop). A
+            # running GPU is the page's to warn about; it is not stopped.
             self.log_message("quit from the page")
+            self._json(200, {"ok": True, "code": "quitting"})
+            self.wfile.flush()
             threading.Thread(target=self.server.shutdown, daemon=True).start()
-            return self._json(200, {"ok": True, "code": "quitting"})
+            return None
         if path == "/control/key":
             # only on a click, only same-origin JSON (the POST guard above): a foreign page
             # can neither send this nor read the answer
