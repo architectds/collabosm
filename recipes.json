@@ -178,7 +178,7 @@
         "vram_mib": {"v": 40593, "measured": true, "src": "the whole card at 262K: what the dense layers, MTP and a 32K-position KV page pool leave becomes the expert cache (17,037 of 24,576 experts)"},
         "context": {"v": 262144, "measured": true, "src": "the native window: Strata's engine reports max_context 262,144 on the A100-40G, 2026-09-29, with the 8-bit KV streamed (a 32K-position page pool in VRAM, the rest in pinned RAM, ~13.7 KB/token). Strata's own setup capped it at 128K below 90 GB of RAM; the fork's setup (c635a56) counts the RAM instead. YaRN beyond 262K: Strata's RoPE has no scaling yet"},
         "vision": {"v": false, "measured": true, "src": "the engine is built without Strata's image encoder"},
-        "concurrency": {"v": 1, "measured": true, "src": "Strata serves one request at a time, by design; and no /v1/responses (chat completions and Anthropic messages only), so Codex and ModelDock cannot use it yet"},
+        "concurrency": {"v": 1, "measured": true, "src": "Strata serves one request at a time, by design; and no /v1/responses (chat completions and Anthropic messages only), so Codex cannot use it yet; ModelDock can, with its chat transport"},
         "host_ram": {"v": "59.2 of 89.6 GB", "measured": true, "src": "at the 262K context on 2026-09-29 (57.8 GB at 128K): the 48 GB pinned expert arena, the KV and the rest"}
       }
     }

@@ -130,10 +130,11 @@ by bootstrap.sh and serve.sh):
   `.venv` first, because setup.sh would otherwise `sudo apt-get install python3-venv`.
 - **Served behind the key.** serve.sh starts `serve/server.py --engine strata` on the same port,
   with the box's key in `STRATA_API_KEY` (its environment, not its argv), and the same tunnel.
-- **What it lacks.** There is no `/v1/responses`, so Codex and ModelDock cannot use it. There is no
-  `/v1/status` either, so the rail shows less; Strata's own `GET /metrics` has per-request timings
-  and the expert hit rate instead. It answers one request at a time, and has no YaRN: its RoPE
-  kernels have no frequency scaling, so 262,144 positions is the ceiling.
+- **What it lacks.** There is no `/v1/responses`, so Codex cannot use it; ModelDock can, set to its
+  chat transport. There is no `/v1/status` either, so the rail shows less; Strata's own
+  `GET /metrics` has per-request timings and the expert hit rate instead. It answers one request at
+  a time, and has no YaRN: its RoPE kernels have no frequency scaling, so 262,144 positions is the
+  ceiling.
 
 ## What is in here
 

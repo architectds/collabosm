@@ -283,7 +283,8 @@ Codex's file-editing tool (`apply_patch`) needs one more setting; see
 ### ModelDock
 
 In ModelDock's dashboard, add a custom model with the address `http://127.0.0.1:3020/v1`, any key
-(for example `sk-local`), and the Responses transport.
+(for example `sk-local`), and the Responses transport. Chat completions works too, and the Strata
+recipe needs it: Strata has no Responses API.
 - **Add it while a GPU is running:** ModelDock asks the address for its models when you add it.
 - **This address never changes,** so you don't have to edit ModelDock again when you start a new
   GPU. The `….trycloudflare.com` address does change with every GPU.
@@ -428,8 +429,9 @@ What you get:
   - Speed: about 900 tokens read per second at 32,000 tokens (1,550 at 86,000; fewer on short
     prompts), and 42–52 written.
   - Length: conversations up to about 260,000 tokens.
-  - Only the chat page (and programs that use chat completions) can use it for now: Codex and
-    ModelDock cannot yet. It answers one request at a time, and pictures are not understood.
+  - The chat page, ModelDock (with its chat transport) and other programs that use chat
+    completions work with it; Codex does not yet, as it needs the Responses API. It answers one
+    request at a time, and pictures are not understood.
   - The first start takes about 22 minutes: most of it is downloading the 84 GB model.
 
 ### C. The command line
