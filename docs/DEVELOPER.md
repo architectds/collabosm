@@ -97,7 +97,7 @@ the numbers are estimates). Only recipes expected to run are listed; a pair that
 |---|---|---|---|---|
 | `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
 | `a100-40g/qwen38-27b` (**default**) | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured (speeds measured with Q8 KV, `docs/MEASURED.md`) | two 409,600-token conversations decoding together (YaRN 1.5625, cache 819,200, `CONCURRENCY 2`), Q4 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~33 GiB of 39 estimated |
-| `a100-40g/qwen38-fn-strata` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-Flash-Next GGUF IQ3_S 3.50 bpw (ISTA-DASLab GSQ-RCO), 83.6 GB, on Strata | verified | Strata's own engine and server (see [Strata recipes](#strata-recipes)); 16,253 of 24,576 experts in VRAM (images on), the rest from pinned RAM on the CPU; real-text prefill 905-1,376 t/s (4K-59K) with the n-gram table in RAM, decode 61-72 t/s; images; one request at a time, no `/v1/responses` |
+| `a100-40g/qwen38-fn-strata` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-Flash-Next GGUF IQ3_S 3.50 bpw (ISTA-DASLab GSQ-RCO), 83.6 GB, on Strata | verified | Strata's own engine and server (see [Strata recipes](#strata-recipes)); 16,251 of 24,576 experts in VRAM (images on), the rest from pinned RAM on the CPU; engine 0.1.24: real-text prefill 1,448-2,497 t/s (16K-144K) with the n-gram table in RAM, decode 59-72 t/s; images; one request at a time, no `/v1/responses` |
 
 The 40 GB card is requested by sending no shape at all (Colab's default is the standard 40 GB shape
 in every draw we logged); `shape=hm` is sent only for High-RAM.
@@ -119,15 +119,16 @@ while a prompt streams them to the GPU. It is its own engine and its own OpenAI-
 so a model with `"engine": "strata"` skips api_server.py altogether (`scripts/strata.sh`, sourced
 by bootstrap.sh and serve.sh):
 
-- **Pinned.** The recipe pins a commit of the fork `architectds/Strata` (branch `linux-prebuilt`)
-  and its ready-made engine: a release zip, SHA-256-checked before Strata's own `setup.py` sees
-  it. The fork adds a Linux build in CI (Ubuntu 22.04, CUDA 12.8, sm_80, AVX2 baseline; about 5
-  minutes, no GPU) and `STRATA_CUDA=12`, which uses CUDA 12's pip libraries and accepts drivers
-  from 525 (CUDA 13 needs 580). It also counts the RAM for the 3-bit models' 262K context rather
-  than capping anything under 90 GB at 128K. The server reports what the conversation cache held
+- **Pinned.** The recipe pins a commit of the fork `architectds/Strata` (branch `linux-prebuilt`:
+  upstream 0.1.24 plus two open PRs) and its ready-made engine: a release zip, SHA-256-checked
+  before Strata's own `setup.py` sees it. The fork's CI builds it when a release is published
+  (Ubuntu 22.04, CUDA 12.8, sm_80/86/89 + PTX, AVX2 baseline, the image encoder; ~45 minutes, no
+  GPU), and `setup.py` uses CUDA 12 on Linux (its pip libraries, drivers from 525; CUDA 13 needs
+  580): Niko1221/Strata#136. It also counts the RAM for the 3-bit models' 262K context rather
+  than capping anything under 90 GB at 128K (#134). The server reports what the conversation cache held
   (`cached_tokens`, `cache_read_input_tokens`), llama.cpp's `timings` and a `GET /v1/status` in
   api_server.py's shape, so the rail, `/props` (image upload) and the idle clock work as they do
-  for ExLlamaV3 (sent upstream as Niko1221/Strata#107). Release `-r2` adds the image encoder.
+  for ExLlamaV3 (Niko1221/Strata#107, upstream since 0.1.23).
 - **Downloaded here, installed by Strata.** `strata_weights` fetches the GGUF (83.6 GB for IQ3_S)
   and the image encoder at the model's pinned revision with Hugging Face's Xet transfers, into
   the folders `setup.py` looks in and with its `.done` marks, so it keeps them: 413 s at ~205 MB/s,
@@ -148,10 +149,12 @@ by bootstrap.sh and serve.sh):
   47 GB arena load pushes the table out; Strata restarts a stopped engine inside a request, so it
   watches the engine's pid and waits for its memory to settle). With 56 GiB in use, the ~27 GiB of
   page cache holds ~90% of the table. Prefill went to 905-1,376 t/s and decode from 42 to 61 t/s.
-- **Where the prompt's time goes now** (`STRATA_PREFILL_TIMING=1`, a 33K prompt): QSA attention
-  36%, GDN 17%, the MoE 27% (of which waiting for streamed experts 3%), the first chunk's n-gram
-  rows 16%. PCIe (12.4 GB/s measured here) is not the limit; Strata's attention and GDN kernels
-  on Ampere are.
+- **Where the prompt's time goes** (`STRATA_PREFILL_TIMING=1`, a 33K prompt, engine 0.1.20): QSA
+  attention 36%, GDN 17%, the MoE 27% (of which waiting for streamed experts 3%), the first
+  chunk's n-gram rows 16%. PCIe (12.4 GB/s measured here) was not the limit; the attention was.
+  0.1.22 moved the prompt's attention onto tensor cores and 0.1.24 its block selection: real-text
+  prefill went from 1,301 t/s at 28K and 1,376 at 59K to 2,082 at 36K and 2,492-2,497 at
+  70K-144K on the same card.
 - **Served behind the key.** serve.sh starts `serve/server.py --engine strata` on the same port,
   with the box's key in `STRATA_API_KEY` (its environment, not its argv), and the same tunnel.
 - **What it lacks.** There is no `/v1/responses`, so Codex cannot use it; ModelDock can, set to its

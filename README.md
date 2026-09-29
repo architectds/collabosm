@@ -426,8 +426,8 @@ What you get:
 - **Qwen3.8-Flash-Next on the A100-40G, with [Strata](https://github.com/Niko1221/Strata)**
   - The same model on the smaller, cheaper card: it does not fit there, so Strata keeps the parts
     it cannot hold on the GPU in the machine's memory and has the processor work them out.
-  - Speed: about 1,300 tokens read per second at 30,000 tokens of real text (900 at 4,000; 1,400
-    at 60,000), and 60–72 written.
+  - Speed: about 2,100 tokens read per second at 36,000 tokens of real text (1,400 at 16,000;
+    2,500 at 70,000 and at 144,000), and 59–72 written.
   - Length: conversations up to about 260,000 tokens.
   - Pictures: understood.
   - The chat page, ModelDock (with its chat transport) and other programs that use chat
