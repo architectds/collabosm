@@ -85,15 +85,15 @@
       "served_id": "qwen3.8-flash-next-iq3_s",
       "bytes": 83600000000,
       "native_ctx": 262144,
-      "vision": false,
+      "vision": true,
       "mtp": true,
       "ngram": true,
       "recurrent": true,
       "strata": {
         "repo": "https://github.com/architectds/Strata",
-        "commit": "c635a56984a5b87c8a190d6a31f437681ea0f54c",
-        "release": "https://github.com/architectds/Strata/releases/download/v0.1.20-linux-sm80-cuda12.8/",
-        "sha256": "9389ec88f32681131e186f5d09cf3c7b2906175ed16e1548bf974ff8cdb44583",
+        "commit": "fd1e7d954f0308b14cce06a280f7825e3c40789b",
+        "release": "https://github.com/architectds/Strata/releases/download/v0.1.20-linux-sm80-cuda12.8-r2/",
+        "sha256": "df7ce1a875c33296c09e31b84ac54b57b49372f60cc0802cad2048172ff1bed3",
         "cuda": 12,
         "quant": "IQ3_S"
       }
@@ -165,21 +165,21 @@
       "gpu": "a100-40g",
       "model": "qwen38-fn-strata",
       "status": "verified",
-      "eta_min": 22,
+      "eta_min": 20,
       "env": {
         "STRATA_CONTEXT": 262144,
         "STRATA_KV": "int8"
       },
       "facts": {
         "weights": {"v": 77.9, "unit": "GiB", "measured": true, "src": "83.6 GB on Hugging Face: two IQ3_S shards (3.50 bpw on average; GSQ-RCO picks each tensor's type, the experts mixing Q2_0 and IQ4_NL by layer) with the 28.8 GB n-gram table; ISTA-DASLab, Apache-2.0. Their benchmarks put it level with BF16 (AIME25, GPQA-Diamond, LiveCodeBench v6: 93.26 vs 93.12)"},
-        "prefill_tps": {"v": 870, "measured": true, "src": "a 32,063-token cold prompt on the A100-40G, 2026-09-29 (engine timings, Strata's /metrics): 870 t/s. It grows with length as each streamed expert serves more tokens: 242 at 4K, 1,558 at 86K; 4,154 new tokens after an 86K cached prefix read in 3.8 s"},
-        "decode_tps": {"v": 42.4, "measured": true, "src": "512 tokens at a short context on the A100-40G, 2026-09-29, expert hit rate 0.97 (47-52 t/s on shorter answers; 52.3 after an 86K cached prompt). 17,155 of the 24,576 experts live in VRAM; Colab's 6 Xeon cores at 2.2 GHz (AVX2) compute the rest; measured at the 128K setting, which does not change the per-token work"},
-        "eta_min": {"v": 22, "measured": true, "src": "billing to READY in 22 min on 2026-09-29, first start: the 83.6 GB model, the MTP layer (~5 GB) and Strata's setup"},
-        "vram_mib": {"v": 40593, "measured": true, "src": "the whole card at 262K: what the dense layers, MTP and a 32K-position KV page pool leave becomes the expert cache (17,037 of 24,576 experts)"},
+        "prefill_tps": {"v": 1301, "measured": true, "src": "real text (code and prose, 28,325 tokens, nothing cached) on the A100-40G, 2026-09-29, the n-gram table in RAM (strata.sh strata_warm): 905 t/s at 4K, 1,202 at 18K, 1,301 at 28K, 1,376 at 59K. The GPU is then busy ~90% of a prompt; at 33K its time goes to QSA attention 36%, GDN 17%, the MoE 27% (waits for streamed experts 3%), the first chunk's n-gram rows 16%. With the table on Colab's PersistentDisk (~2,500 reads/s) the same text read at 240-410 t/s; the 870 measured before came from a 25-word synthetic prompt the row cache absorbed. 16K prompt chunks: 3% faster at 59K, 10-13% slower below 30K"},
+        "decode_tps": {"v": 61.0, "measured": true, "src": "a 512-token answer at a short context on the A100-40G, 2026-09-29, expert hit rate 0.96, the n-gram table in RAM (42.4 with it read from disk); 65.9 after a 34K prompt, 72.0 on a short next turn. 16,253 of the 24,576 experts live in VRAM with images on; Colab's Xeon (6 cores, 2.2 GHz, AVX2) computes the rest"},
+        "eta_min": {"v": 20, "measured": true, "src": "billing to READY in 19 min 46 s on 2026-09-29: the model's 84.5 GB at its pinned revision in 413 s (Xet, ~205 MB/s, about what the disk writes), Strata's setup 1 min, its model pack ~3 min, the MTP layer (fetched from Qwen's checkpoint and converted) ~4 min, the engine's start 4 min (46.84 GiB of experts read at 0.34 GiB/s); the n-gram table then goes into RAM in the background (~90 s). setup.py's own one-stream download made it 22 min"},
+        "vram_mib": {"v": 40765, "measured": true, "src": "the whole card at 262K with images, 2026-09-29: what the dense layers, MTP, a 32K-position KV page pool and the image encoder's 700 MiB leave becomes the expert cache (16,253 of 24,576 experts)"},
         "context": {"v": 262144, "measured": true, "src": "the native window: Strata's engine reports max_context 262,144 on the A100-40G, 2026-09-29, with the 8-bit KV streamed (a 32K-position page pool in VRAM, the rest in pinned RAM, ~13.7 KB/token). Strata's own setup capped it at 128K below 90 GB of RAM; the fork's setup (c635a56) counts the RAM instead. YaRN beyond 262K: Strata's RoPE has no scaling yet"},
-        "vision": {"v": false, "measured": true, "src": "the engine is built without Strata's image encoder"},
+        "vision": {"v": true, "measured": true, "src": "the image encoder on the card (llama.cpp mtmd, 700 MiB reserved from the expert cache): a 640x400 test image read right (shapes, colors, places, its text) in 3.2 s with the answer, 2026-09-29"},
         "concurrency": {"v": 1, "measured": true, "src": "Strata serves one request at a time, by design; and no /v1/responses (chat completions and Anthropic messages only), so Codex cannot use it yet; ModelDock can, with its chat transport"},
-        "host_ram": {"v": "59.2 of 89.6 GB", "measured": true, "src": "at the 262K context on 2026-09-29 (57.8 GB at 128K): the 48 GB pinned expert arena, the KV and the rest"}
+        "host_ram": {"v": "56 of 83.5 GiB", "measured": true, "src": "2026-09-29 at 262K with images: the engine 52.4 GiB (the 46.84 GiB pinned expert arena, 3.9 GiB of pinned KV and buffers, its heap), the rest of the box ~1.5 GiB; the ~27 GiB left is page cache, where strata_warm keeps ~90% of the 26.8 GiB n-gram table"}
       }
     }
   ]

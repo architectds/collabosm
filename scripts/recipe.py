@@ -144,7 +144,9 @@ def launch_env(reg: dict, rid: str) -> dict:
         s = m["strata"]
         env.update({"STRATA_REPO": s["repo"], "STRATA_COMMIT": s["commit"],
                     "STRATA_PREBUILT_URL": s["release"], "STRATA_SHA256": s["sha256"],
-                    "STRATA_CUDA": s["cuda"], "STRATA_MODEL": s["quant"]})
+                    "STRATA_CUDA": s["cuda"], "STRATA_MODEL": s["quant"],
+                    # the image encoder on the card (a recipe's env can say cpu)
+                    "STRATA_VISION": "gpu" if m.get("vision") else "none"})
     env.update(r.get("env") or {})
     return {k: _scalar(v) for k, v in env.items()}
 

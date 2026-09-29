@@ -64,6 +64,7 @@ for _ in $(seq 1 120); do
 done
 [[ "${code:-}" == "200" ]] || { say "!! never became healthy"; tail -80 "$LOG"; status "stage=serve_timeout"; exit 1; }
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader | sed 's/^/  /'
+[ "${ENGINE:-exl3}" = "strata" ] && strata_warm   # its n-gram table into RAM (strata.sh)
 
 [[ -x /content/cloudflared ]] || curl -fsSL -o /content/cloudflared \
   https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \

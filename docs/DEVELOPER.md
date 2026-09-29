@@ -97,7 +97,7 @@ the numbers are estimates). Only recipes expected to run are listed; a pair that
 |---|---|---|---|---|
 | `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
 | `a100-40g/qwen38-27b` (**default**) | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured (speeds measured with Q8 KV, `docs/MEASURED.md`) | two 409,600-token conversations decoding together (YaRN 1.5625, cache 819,200, `CONCURRENCY 2`), Q4 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~33 GiB of 39 estimated |
-| `a100-40g/qwen38-fn-strata` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-Flash-Next GGUF IQ3_S 3.50 bpw (ISTA-DASLab GSQ-RCO), 83.6 GB, on Strata | verified | Strata's own engine and server (see [Strata recipes](#strata-recipes)); 17,155 of 24,576 experts in VRAM, the rest from pinned RAM on the CPU; decode 42-52 t/s, prefill 870 t/s at 32K and 1,558 at 86K; one request at a time, no `/v1/responses`, no vision |
+| `a100-40g/qwen38-fn-strata` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-Flash-Next GGUF IQ3_S 3.50 bpw (ISTA-DASLab GSQ-RCO), 83.6 GB, on Strata | verified | Strata's own engine and server (see [Strata recipes](#strata-recipes)); 16,253 of 24,576 experts in VRAM (images on), the rest from pinned RAM on the CPU; real-text prefill 905-1,376 t/s (4K-59K) with the n-gram table in RAM, decode 61-72 t/s; images; one request at a time, no `/v1/responses` |
 
 The 40 GB card is requested by sending no shape at all (Colab's default is the standard 40 GB shape
 in every draw we logged); `shape=hm` is sent only for High-RAM.
@@ -124,17 +124,40 @@ by bootstrap.sh and serve.sh):
   it. The fork adds a Linux build in CI (Ubuntu 22.04, CUDA 12.8, sm_80, AVX2 baseline; about 5
   minutes, no GPU) and `STRATA_CUDA=12`, which uses CUDA 12's pip libraries and accepts drivers
   from 525 (CUDA 13 needs 580). It also counts the RAM for the 3-bit models' 262K context rather
-  than capping anything under 90 GB at 128K.
-- **Installed by Strata.** `setup.py --yes --no-start` downloads the GGUF (83.6 GB for IQ3_S),
-  fetches and packs the MTP draft layer and writes `strata-<quant>.json`. strata.sh makes its
-  `.venv` first, because setup.sh would otherwise `sudo apt-get install python3-venv`.
+  than capping anything under 90 GB at 128K. The server reports what the conversation cache held
+  (`cached_tokens`, `cache_read_input_tokens`), llama.cpp's `timings` and a `GET /v1/status` in
+  api_server.py's shape, so the rail, `/props` (image upload) and the idle clock work as they do
+  for ExLlamaV3 (sent upstream as Niko1221/Strata#107). Release `-r2` adds the image encoder.
+- **Downloaded here, installed by Strata.** `strata_weights` fetches the GGUF (83.6 GB for IQ3_S)
+  and the image encoder at the model's pinned revision with Hugging Face's Xet transfers, into
+  the folders `setup.py` looks in and with its `.done` marks, so it keeps them: 413 s at ~205 MB/s,
+  about what the disk writes, where setup.py's one HTTP stream per file took most of a 22-minute
+  first start. `setup.py --yes --no-start` then packs the model, fetches and packs the MTP draft
+  layer and writes `strata-<quant>.json`. strata.sh makes its `.venv` first, because setup.sh
+  would otherwise `sudo apt-get install python3-venv`. A recipe's `STRATA_ENGINE_ARGS` is merged
+  into the config's flags afterwards (a flag gets the recipe's value, `-FLAG` removes one); the
+  A100-40G recipe needs none: 16K prompt chunks measured 3% faster at 59K and 10-13% slower below
+  30K than Strata's own 8K.
+- **The n-gram table in RAM.** The second shard (28.8 GB) is read 16 rows a token, one 4 KB
+  O_DIRECT read each, one at a time (Strata's Linux reader has no io_uring yet). `/content` is
+  overlayfs on a loop device over Colab's PersistentDisk, which serves ~2,500 random reads a second
+  whatever the queue depth: real text then read at 240-410 t/s with the GPU idle 72% of the time.
+  The loop device caches its backing file (`dio=0`): a buffered read caches the table twice and
+  pushes itself out, but one O_DIRECT pass leaves it in RAM once, and a lookup is then a ~27 us
+  copy. serve.sh starts `strata_warm`, which makes that pass after each engine start (the engine's
+  47 GB arena load pushes the table out; Strata restarts a stopped engine inside a request, so it
+  watches the engine's pid and waits for its memory to settle). With 56 GiB in use, the ~27 GiB of
+  page cache holds ~90% of the table. Prefill went to 905-1,376 t/s and decode from 42 to 61 t/s.
+- **Where the prompt's time goes now** (`STRATA_PREFILL_TIMING=1`, a 33K prompt): QSA attention
+  36%, GDN 17%, the MoE 27% (of which waiting for streamed experts 3%), the first chunk's n-gram
+  rows 16%. PCIe (12.4 GB/s measured here) is not the limit; Strata's attention and GDN kernels
+  on Ampere are.
 - **Served behind the key.** serve.sh starts `serve/server.py --engine strata` on the same port,
   with the box's key in `STRATA_API_KEY` (its environment, not its argv), and the same tunnel.
 - **What it lacks.** There is no `/v1/responses`, so Codex cannot use it; ModelDock can, set to its
-  chat transport. There is no `/v1/status` either, so the rail shows less; Strata's own
-  `GET /metrics` has per-request timings and the expert hit rate instead. It answers one request at
-  a time, and has no YaRN: its RoPE kernels have no frequency scaling, so 262,144 positions is the
-  ceiling.
+  chat transport. It answers one request at a time, and has no YaRN: its RoPE kernels have no
+  frequency scaling, so 262,144 positions is the ceiling. Strata's own `GET /metrics` has more
+  than `/v1/status`: the expert hit rate and a minute of hardware history.
 
 ## What is in here
 

@@ -191,10 +191,11 @@ def cmd_up(a) -> int:
         % (rid, E["ACCELERATOR"], E["SHAPE"], E["MIN_VRAM_GIB"], E["MODEL_REPO"],
            E["MODEL_REVISION"][:12]))
     if E.get("ENGINE") == "strata":
-        say("  Strata %s @ %s: %s, context=%s kv=%s, CUDA %s"
+        say("  Strata %s @ %s: %s, context=%s kv=%s vision=%s, CUDA %s%s"
             % (E.get("STRATA_REPO", "?").rsplit("/", 2)[-2], E.get("STRATA_COMMIT", "?")[:12],
                E.get("STRATA_MODEL") or "?", E.get("STRATA_CONTEXT") or "?", E.get("STRATA_KV") or "?",
-               E.get("STRATA_CUDA") or "?"))
+               E.get("STRATA_VISION") or "none", E.get("STRATA_CUDA") or "?",
+               ", engine " + E["STRATA_ENGINE_ARGS"] if E.get("STRATA_ENGINE_ARGS") else ""))
     else:
         say("  cache=%s cq=%s ccs=%sGB rcs=%sGB ndt=%s gcs=%s vision=%s yarn=%s"
             % (E.get("CACHE_SIZE") or "?", E.get("CACHE_QUANT") or "?", E.get("CPU_CACHE_GB") or "0",
