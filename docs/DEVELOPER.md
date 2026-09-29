@@ -97,6 +97,7 @@ the numbers are estimates). Only recipes expected to run are listed; a pair that
 |---|---|---|---|---|
 | `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
 | `a100-40g/qwen38-27b` (**default**) | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured (speeds measured with Q8 KV, `docs/MEASURED.md`) | two 409,600-token conversations decoding together (YaRN 1.5625, cache 819,200, `CONCURRENCY 2`), Q4 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~33 GiB of 39 estimated |
+| `a100-40g/qwen38-fn-strata` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-Flash-Next GGUF IQ3_S 3.50 bpw (ISTA-DASLab GSQ-RCO), 83.6 GB, on Strata | verified | Strata's own engine and server (see [Strata recipes](#strata-recipes)); 17,155 of 24,576 experts in VRAM, the rest from pinned RAM on the CPU; decode 42-52 t/s, prefill 870 t/s at 32K and 1,558 at 86K; one request at a time, no `/v1/responses`, no vision |
 
 The 40 GB card is requested by sending no shape at all (Colab's default is the standard 40 GB shape
 in every draw we logged); `shape=hm` is sent only for High-RAM.
@@ -109,6 +110,30 @@ them by rewriting `text_config.rope_parameters` to `rope_type: "yarn"` with a `f
 also raises `max_position_embeddings` to `262144 x factor`, keeps the pack's own file as
 `config.json.orig`, and puts it back when a recipe asks for no YaRN (static YaRN costs a little on
 short prompts, the card warns). Quality past 262K is not measured yet.
+
+### Strata recipes
+
+[Strata](https://github.com/Niko1221/Strata) runs Qwen3.8-Flash-Next where it does not fit in
+VRAM. The experts it cannot keep on the card sit in pinned RAM and are computed there by the CPU,
+while a prompt streams them to the GPU. It is its own engine and its own OpenAI-compatible server,
+so a model with `"engine": "strata"` skips api_server.py altogether (`scripts/strata.sh`, sourced
+by bootstrap.sh and serve.sh):
+
+- **Pinned.** The recipe pins a commit of the fork `architectds/Strata` (branch `linux-prebuilt`)
+  and its ready-made engine: a release zip, SHA-256-checked before Strata's own `setup.py` sees
+  it. The fork adds a Linux build in CI (Ubuntu 22.04, CUDA 12.8, sm_80, AVX2 baseline; about 5
+  minutes, no GPU) and `STRATA_CUDA=12`, which uses CUDA 12's pip libraries and accepts drivers
+  from 525 (CUDA 13 needs 580). It also counts the RAM for the 3-bit models' 262K context rather
+  than capping anything under 90 GB at 128K.
+- **Installed by Strata.** `setup.py --yes --no-start` downloads the GGUF (83.6 GB for IQ3_S),
+  fetches and packs the MTP draft layer and writes `strata-<quant>.json`. strata.sh makes its
+  `.venv` first, because setup.sh would otherwise `sudo apt-get install python3-venv`.
+- **Served behind the key.** serve.sh starts `serve/server.py --engine strata` on the same port,
+  with the box's key in `STRATA_API_KEY` (its environment, not its argv), and the same tunnel.
+- **What it lacks.** There is no `/v1/responses`, so Codex and ModelDock cannot use it. There is no
+  `/v1/status` either, so the rail shows less; Strata's own `GET /metrics` has per-request timings
+  and the expert hit rate instead. It answers one request at a time, and has no YaRN: its RoPE
+  kernels have no frequency scaling, so 262,144 positions is the ceiling.
 
 ## What is in here
 

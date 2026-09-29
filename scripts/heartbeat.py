@@ -86,7 +86,8 @@ def _collabosm_heartbeat():
         beat["disk_free_gib"] = None
 
     # the model server, from inside the VM: no tunnel in the way
-    server = {"proc": bool(sh("pgrep -f /content/api_server.py"))}
+    # ours (api_server.py), or Strata's own server for a Strata recipe (scripts/strata.sh)
+    server = {"proc": bool(sh("pgrep -f '/content/api_server.py|serve/server.py --engine strata'"))}
     code, _, ms = http("http://127.0.0.1:%d/health" % port)
     server.update(health=code, ms=ms)
     key = read("/content/api-key.txt")

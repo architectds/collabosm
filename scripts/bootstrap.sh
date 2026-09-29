@@ -53,6 +53,16 @@ try:
 except Exception as e:
     raise SystemExit("torch missing: %r" % e)
 PY
+nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader | sed 's/^/  /' || true
+
+# ------------------------------------------------------ a Strata recipe instead
+# Strata brings its own engine and server (strata.sh): the ExLlamaV3 runtime and the
+# EXL3 weights below are not for it. The env block at the end is shared.
+if [ "${ENGINE:-exl3}" = "strata" ]; then
+  . /content/strata.sh
+  strata_install || fail "Strata install (see the lines above)"
+else
+# ------------------------------------ ExLlamaV3: the runtime, then the weights
 
 # ---------------------------------------------------------------- the runtime
 status "stage=runtime"
@@ -111,6 +121,7 @@ PY
   say "weights in $(( $(date +%s) - t0 ))s"
 fi
 [ -f "$MODEL_DIR/config.json" ] || fail "no config.json in $MODEL_DIR - the pack is incomplete"
+fi   # ExLlamaV3 / Strata
 
 # ------------------------------------------------------------------ the env
 # Everything serve.sh (and a later restart of it) launches with: the recipe's

@@ -8,7 +8,7 @@ if not os.path.exists(log):
 txt = open(log, errors="replace").read()
 if "BOOTSTRAP_FAILED" in txt:
     print("bootstrap_failed")
-    print(txt[-1500:])
+    print(txt[-4000:])
 elif "BOOTSTRAP_OK" in txt:
     print("bootstrap_ok")
 else:

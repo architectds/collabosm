@@ -68,6 +68,32 @@
       "mtp": true,
       "ngram": false,
       "recurrent": true
+    },
+    {
+      "id": "qwen38-fn-strata",
+      "name": "Qwen3.8-Flash-Next",
+      "params": "125B-A6B MoE",
+      "quant": "GGUF IQ3_S, 3.50 bpw (ISTA-DASLab GSQ-RCO), on Strata",
+      "engine": "strata",
+      "repo": "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF",
+      "branch": "main",
+      "revision": "2a55d75962e22f7a4a1d9963ab6eae3678537831",
+      "dir": "/content/strata-data",
+      "served_id": "qwen3.8-flash-next-iq3_s",
+      "bytes": 83600000000,
+      "native_ctx": 262144,
+      "vision": false,
+      "mtp": true,
+      "ngram": true,
+      "recurrent": true,
+      "strata": {
+        "repo": "https://github.com/architectds/Strata",
+        "commit": "c635a56984a5b87c8a190d6a31f437681ea0f54c",
+        "release": "https://github.com/architectds/Strata/releases/download/v0.1.20-linux-sm80-cuda12.8/",
+        "sha256": "9389ec88f32681131e186f5d09cf3c7b2906175ed16e1548bf974ff8cdb44583",
+        "cuda": 12,
+        "quant": "IQ3_S"
+      }
     }
   ],
   "recipes": [
@@ -128,6 +154,28 @@
         "vision": {"v": true, "measured": false, "src": "the pack carries vision_k6.safetensors (561 MB); its weights sit in pinned host RAM (EXL3_VISION_PINNED) so the tower costs no VRAM for weights; image encoding speed not measured"},
         "concurrency": {"v": 1, "measured": true, "src": "one job per engine step (CONCURRENCY 1); how many live jobs would fit is computed in docs/CONCURRENCY.md, never exercised"},
         "host_ram": {"v": "ngr 36.4 + ccs 32 + rcs 24 GiB", "measured": false, "src": "the verified run used -ccs 16 -rcs 16"}
+      }
+    },
+    {
+      "id": "a100-40g/qwen38-fn-strata",
+      "gpu": "a100-40g",
+      "model": "qwen38-fn-strata",
+      "status": "verified",
+      "eta_min": 22,
+      "env": {
+        "STRATA_CONTEXT": 262144,
+        "STRATA_KV": "int8"
+      },
+      "facts": {
+        "weights": {"v": 77.9, "unit": "GiB", "measured": true, "src": "83.6 GB on Hugging Face: two IQ3_S shards (3.50 bpw on average; GSQ-RCO picks each tensor's type, the experts mixing Q2_0 and IQ4_NL by layer) with the 28.8 GB n-gram table; ISTA-DASLab, Apache-2.0. Their benchmarks put it level with BF16 (AIME25, GPQA-Diamond, LiveCodeBench v6: 93.26 vs 93.12)"},
+        "prefill_tps": {"v": 870, "measured": true, "src": "a 32,063-token cold prompt on the A100-40G, 2026-09-29 (engine timings, Strata's /metrics): 870 t/s. It grows with length as each streamed expert serves more tokens: 242 at 4K, 1,558 at 86K; 4,154 new tokens after an 86K cached prefix read in 3.8 s"},
+        "decode_tps": {"v": 42.4, "measured": true, "src": "512 tokens at a short context on the A100-40G, 2026-09-29, expert hit rate 0.97 (47-52 t/s on shorter answers; 52.3 after an 86K cached prompt). 17,155 of the 24,576 experts live in VRAM; Colab's 6 Xeon cores at 2.2 GHz (AVX2) compute the rest; measured at the 128K setting, which does not change the per-token work"},
+        "eta_min": {"v": 22, "measured": true, "src": "billing to READY in 22 min on 2026-09-29, first start: the 83.6 GB model, the MTP layer (~5 GB) and Strata's setup"},
+        "vram_mib": {"v": 40593, "measured": true, "src": "the whole card at 262K: what the dense layers, MTP and a 32K-position KV page pool leave becomes the expert cache (17,037 of 24,576 experts)"},
+        "context": {"v": 262144, "measured": true, "src": "the native window: Strata's engine reports max_context 262,144 on the A100-40G, 2026-09-29, with the 8-bit KV streamed (a 32K-position page pool in VRAM, the rest in pinned RAM, ~13.7 KB/token). Strata's own setup capped it at 128K below 90 GB of RAM; the fork's setup (c635a56) counts the RAM instead. YaRN beyond 262K: Strata's RoPE has no scaling yet"},
+        "vision": {"v": false, "measured": true, "src": "the engine is built without Strata's image encoder"},
+        "concurrency": {"v": 1, "measured": true, "src": "Strata serves one request at a time, by design; and no /v1/responses (chat completions and Anthropic messages only), so Codex and ModelDock cannot use it yet"},
+        "host_ram": {"v": "59.2 of 89.6 GB", "measured": true, "src": "at the 262K context on 2026-09-29 (57.8 GB at 128K): the 48 GB pinned expert arena, the KV and the rest"}
       }
     }
   ]

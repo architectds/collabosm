@@ -37,18 +37,28 @@ for pid in $(pgrep -f 'bash /content/serve.sh' 2>/dev/null); do
   [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
 done
 pkill -f 'api_serve[r].py' 2>/dev/null || true
+pkill -f 'serve/serve[r].py --engine strata' 2>/dev/null || true
 pkill -f 'cloudflare[d]' 2>/dev/null || true
 sleep 2
 
-say "starting the API for ${RECIPE:-no recipe} (${MODEL_ID:-?}: cache=${CACHE_SIZE:-262144} cq=${CACHE_QUANT:-4} ccs=${CPU_CACHE_GB:-0}GB rcs=${RECURRENT_CACHE_GB:-4}GB ndt=${NDT:-4} gcs=${GCS:-4096} vision=${VISION:-0} yarn=${YARN_FACTOR:-0})"
 status "stage=loading"
-nohup $PY -u /content/api_server.py --port "$PORT" > "$LOG" 2>&1 &
+if [ "${ENGINE:-exl3}" = "strata" ]; then
+  # Strata's own server (strata.sh): same port, same key, same tunnel below
+  . /content/strata.sh
+  say "starting Strata for ${RECIPE:-no recipe} (${MODEL_ID:-?}: ${STRATA_MODEL:-?}, context ${STRATA_CONTEXT:-262144}, kv ${STRATA_KV:-int8})"
+  strata_start || { status "stage=serve_failed"; exit 1; }
+  PROC="$STRATA_PROC"
+else
+  say "starting the API for ${RECIPE:-no recipe} (${MODEL_ID:-?}: cache=${CACHE_SIZE:-262144} cq=${CACHE_QUANT:-4} ccs=${CPU_CACHE_GB:-0}GB rcs=${RECURRENT_CACHE_GB:-4}GB ndt=${NDT:-4} gcs=${GCS:-4096} vision=${VISION:-0} yarn=${YARN_FACTOR:-0})"
+  nohup $PY -u /content/api_server.py --port "$PORT" > "$LOG" 2>&1 &
+  PROC='/content/api_server.py'
+fi
 
 for _ in $(seq 1 120); do
   code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "http://127.0.0.1:$PORT/health" || true)
   [[ "$code" == "200" ]] && break
-  if ! pgrep -f '/content/api_server.py' >/dev/null; then
-    say "!! api_server died"; tail -80 "$LOG"; status "stage=serve_failed"; exit 1
+  if ! pgrep -f "$PROC" >/dev/null; then
+    say "!! the model server died"; tail -80 "$LOG"; status "stage=serve_failed"; exit 1
   fi
   sleep 5
 done
@@ -91,7 +101,9 @@ PY
 if [[ -n "$URL" ]]; then
   printf '%s\n' "$URL" > /content/url.txt
   status "stage=ready url=$URL port=$PORT"
-  say "ready: $URL   (api key: $KEY)"
+  # never the key itself: this log is read back over `colab exec`, and a key in it is a key
+  # anyone holding that output can spend the box with
+  say "ready: $URL   (api key in $KEY_FILE)"
 else
   status "stage=ready_no_tunnel port=$PORT"
   say "ready locally on :$PORT; no tunnel url (check $TUNNEL_LOG)"

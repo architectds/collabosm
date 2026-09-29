@@ -36,6 +36,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = os.environ.get("RECIPES_FILE") or os.path.join(HERE, os.pardir, "recipes.json")
 STATUSES = ("verified", "unmeasured", "placeholder")
+# what serves the model on the box: our api_server.py on ExLlamaV3, or Strata's own server
+ENGINES = ("exl3", "strata")
 DEFAULT = "a100-40g/qwen38-27b"
 ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # What the VM keeps besides the recipe's own keys, when the caller sets them: they are
@@ -71,6 +73,16 @@ def validate(reg: dict) -> list:
         for k in ("name", "repo", "revision", "dir", "served_id"):
             if not m.get(k):
                 out.append("model %s: no %s" % (m.get("id"), k))
+        if m.get("engine", "exl3") not in ENGINES:
+            out.append("model %s: engine must be one of %s" % (m.get("id"), "/".join(ENGINES)))
+        if m.get("engine") == "strata":
+            # the engine is someone else's code and binary: pinned to a commit and a checksum
+            s = m.get("strata") or {}
+            for k, pat in (("repo", r"https://github\.com/[\w.-]+/[\w.-]+$"), ("commit", r"[0-9a-f]{40}$"),
+                           ("release", r"https://\S+/$"), ("sha256", r"[0-9a-f]{64}$"),
+                           ("cuda", r"1[23]$"), ("quant", r"[A-Z0-9_]+$")):
+                if not re.match(pat, str(s.get(k, ""))):
+                    out.append("model %s: strata.%s missing or malformed" % (m.get("id"), k))
         # bootstrap.sh keeps one pack per directory (its .collabosm-revision marker)
         if m.get("dir") in dirs:
             out.append("models %s and %s share %s" % (dirs[m["dir"]], m.get("id"), m["dir"]))
@@ -123,7 +135,13 @@ def launch_env(reg: dict, rid: str) -> dict:
         "MODEL_REPO": m["repo"], "MODEL_REVISION": m["revision"], "MODEL_DIR": m["dir"],
         "MODEL_ID": m["served_id"],
         "MTP": 1 if m.get("mtp") else 0, "NGRAM": 1 if m.get("ngram") else 0,
+        "ENGINE": m.get("engine", "exl3"),
     }
+    if m.get("engine") == "strata":
+        s = m["strata"]
+        env.update({"STRATA_REPO": s["repo"], "STRATA_COMMIT": s["commit"],
+                    "STRATA_PREBUILT_URL": s["release"], "STRATA_SHA256": s["sha256"],
+                    "STRATA_CUDA": s["cuda"], "STRATA_MODEL": s["quant"]})
     env.update(r.get("env") or {})
     return {k: _scalar(v) for k, v in env.items()}
 

@@ -51,7 +51,7 @@ import recipe as registry  # noqa: E402
 # what serve.sh launches on the VM, and what it reads its state with; api_server.py
 # above all -- the kit once shipped without it, and a fresh clone waited 50 paid
 # minutes for a /health that nothing could answer
-KIT = ("api_server.py", "bootstrap.sh", "serve.sh", "status.py", "probe_gpu.py")
+KIT = ("api_server.py", "bootstrap.sh", "serve.sh", "strata.sh", "status.py", "probe_gpu.py")
 
 # Runs on the VM. A re-attached box still has the last run's STATUS and endpoint.json:
 # they go first, so nothing can take the old service for the new one. serve.sh is
@@ -190,10 +190,16 @@ def cmd_up(a) -> int:
     say("recipe %s: %s shape=%s (>= %s GiB) · %s@%s"
         % (rid, E["ACCELERATOR"], E["SHAPE"], E["MIN_VRAM_GIB"], E["MODEL_REPO"],
            E["MODEL_REVISION"][:12]))
-    say("  cache=%s cq=%s ccs=%sGB rcs=%sGB ndt=%s gcs=%s vision=%s yarn=%s"
-        % (E.get("CACHE_SIZE") or "?", E.get("CACHE_QUANT") or "?", E.get("CPU_CACHE_GB") or "0",
-           E.get("RECURRENT_CACHE_GB") or "?", E.get("NDT") or "?", E.get("GCS") or "?",
-           E.get("VISION") or "0", E.get("YARN_FACTOR") or "0"))
+    if E.get("ENGINE") == "strata":
+        say("  Strata %s @ %s: %s, context=%s kv=%s, CUDA %s"
+            % (E.get("STRATA_REPO", "?").rsplit("/", 2)[-2], E.get("STRATA_COMMIT", "?")[:12],
+               E.get("STRATA_MODEL") or "?", E.get("STRATA_CONTEXT") or "?", E.get("STRATA_KV") or "?",
+               E.get("STRATA_CUDA") or "?"))
+    else:
+        say("  cache=%s cq=%s ccs=%sGB rcs=%sGB ndt=%s gcs=%s vision=%s yarn=%s"
+            % (E.get("CACHE_SIZE") or "?", E.get("CACHE_QUANT") or "?", E.get("CPU_CACHE_GB") or "0",
+               E.get("RECURRENT_CACHE_GB") or "?", E.get("NDT") or "?", E.get("GCS") or "?",
+               E.get("VISION") or "0", E.get("YARN_FACTOR") or "0"))
 
     # ---- 1. the box
     say("restoring/creating the %s box, shape %s (session: %s)" % (E["ACCELERATOR"], E["SHAPE"], session))
@@ -273,7 +279,10 @@ def cmd_up(a) -> int:
         rc, out = colab(["exec", "-s", session, "--timeout", "60", "-f",
                          os.path.join(HERE, "bootstrap_ok.py")], timeout=120)
         if "bootstrap_failed" in out:
-            say("!! bootstrap reported failure - see /content/bootstrap.log on the VM")
+            # the log's last lines, here: a failed start is stopped right after this, and
+            # its /content/bootstrap.log goes with the box
+            indented(out.split("bootstrap_failed", 1)[1])
+            say("!! bootstrap reported failure - the end of /content/bootstrap.log is above")
             return 1
     say("!! timed out after %s min" % _minutes(wait_min))
     return 7

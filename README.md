@@ -400,6 +400,7 @@ stand-in, see [docs/DEVELOPER.md](docs/DEVELOPER.md).)
 |---|---|---|---|---|---|
 | A100-40G (the default) | Qwen3.8-27B | measured once | 5.37 (Colab's figure) | $0.54 | ~6 min |
 | A100-80G High-RAM | Qwen3.8-Flash-Next | tested | 6.77 (Colab's own rate) | $0.68 | ~11 min |
+| A100-40G | Qwen3.8-Flash-Next, on Strata | tested | 5.37 (Colab's figure) | $0.54 | ~22 min |
 
 - Compute units are Colab's currency: about $0.10 each when bought pay-as-you-go.
 - Loading counts too: about 1.8 compute units per start on the 80G GPU, which the cost card shows
@@ -421,6 +422,15 @@ What you get:
   - Length: conversations up to about 500,000 tokens.
   - Pictures: understood.
   - Those speeds were measured with conversations up to 114,000 tokens.
+- **Qwen3.8-Flash-Next on the A100-40G, with [Strata](https://github.com/Niko1221/Strata)**
+  - The same model on the smaller, cheaper card: it does not fit there, so Strata keeps the parts
+    it cannot hold on the GPU in the machine's memory and has the processor work them out.
+  - Speed: about 900 tokens read per second at 32,000 tokens (1,550 at 86,000; fewer on short
+    prompts), and 42–52 written.
+  - Length: conversations up to about 260,000 tokens.
+  - Only the chat page (and programs that use chat completions) can use it for now: Codex and
+    ModelDock cannot yet. It answers one request at a time, and pictures are not understood.
+  - The first start takes about 22 minutes: most of it is downloading the 84 GB model.
 
 ### C. The command line
 
