@@ -157,30 +157,34 @@ STRATA_PROC='serve/server.py --engine strata'
 # and decode 42 -> 61 t/s (measured on the A100-40G, 2026-09-29). The engine's own start
 # reads 47 GB of experts through the same cache and pushes the table out, so this runs
 # after every engine start, the first and any restart (Strata restarts a stopped engine
-# inside the next request, its /health up throughout), once the engine's memory has
-# stopped growing: in the background, chat works during the ~90 s, just slower.
+# inside the next request, its /health up throughout): once a new engine has logged
+# "session is up", which it does after its experts are read and the GPU's cache filled
+# (its memory looks settled long before: the arena is pinned whole, then filled). In
+# the background: chat works during the ~90 s, just slower.
 strata_warm() {
-  local table; table=$(ls "$MODEL_DIR/models/$STRATA_MODEL/"*-00002-of-00002.gguf 2>/dev/null | head -1)
+  local table log cfg; table=$(ls "$MODEL_DIR/models/$STRATA_MODEL/"*-00002-of-00002.gguf 2>/dev/null | head -1)
   [ -n "$table" ] || { say "no n-gram table to warm under $MODEL_DIR/models/$STRATA_MODEL"; return 0; }
+  cfg=$(strata_config)
+  log=$("$STRATA_DIR/.venv/bin/python" -c "import json,sys; print(json.load(open(sys.argv[1]))['log'])" "$cfg" 2>/dev/null)
+  [ -n "$log" ] || { say "no engine log in $cfg: the n-gram table stays on disk"; return 0; }
   pkill -f 'strata_war[m]_loop' 2>/dev/null || true
   setsid nohup bash -c '
     strata_warm_loop() {
-      local last="" prev=0 pid rss t0
+      local last="" seen=0 pid up t0
       while :; do
         pid=$(pgrep -f "/engine/strat[a] --serve" | head -1)
-        rss=$(ps -o rss= -p "${pid:-0}" 2>/dev/null | tr -d " ")
-        # loaded: over 10 GB resident and under 100 MB more than 20 s ago
-        if [ -n "$pid" ] && [ "$pid" != "$last" ] && [ "${rss:-0}" -gt 10000000 ] && \
-           [ $(( ${rss:-0} - prev )) -lt 102400 ]; then
+        up=$(grep -c "session is up" "$2" 2>/dev/null)
+        [ "${up:-0}" -lt "$seen" ] && seen=0          # a new log
+        # a new engine that has come up since the last pass (the log is appended to)
+        if [ -n "$pid" ] && [ "$pid" != "$last" ] && [ "${up:-0}" -gt "$seen" ]; then
           t0=$(date +%s)
           dd if="$1" of=/dev/null bs=16M iflag=direct status=none
           echo "[warm $(date -u +%H:%M:%S)] n-gram table in RAM in $(( $(date +%s) - t0 ))s (engine $pid)"
-          last=$pid
+          last=$pid seen=${up:-0}
         fi
-        prev=${rss:-0}
         sleep 20
       done
     }
-    strata_warm_loop "$1"' strata-warm "$table" >> /content/strata-warm.log 2>&1 < /dev/null &
+    strata_warm_loop "$1" "$2"' strata-warm "$table" "$log" >> /content/strata-warm.log 2>&1 < /dev/null &
   say "n-gram table: kept in RAM after each engine start (/content/strata-warm.log)"
 }
