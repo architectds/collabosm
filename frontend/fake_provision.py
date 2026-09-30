@@ -21,7 +21,7 @@ import time
 
 SCALE = float(os.environ.get("COLLABOSM_FAKE_SECONDS", "24")) / 24.0
 FAIL = os.environ.get("COLLABOSM_FAKE_FAIL", "")
-# the address the rehearsal VM "publishes": the fake VM when one serves (server.py
+# the address the rehearsal VM "publishes": the fake VM when one serves (collabosm.py
 # --fake-vm), so the rail couples to what the log said instead of "moving" to it
 URL = os.environ.get("COLLABOSM_FAKE_VM_URL") or "https://rehearsal-collabosm.trycloudflare.com"
 

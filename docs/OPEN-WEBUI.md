@@ -38,7 +38,7 @@ dependency set.
 ## Run
 
 `E:\open-webui\start-mock.ps1` starts it against the local mock. For a real endpoint change
-`OPENAI_API_BASE_URL` to the frontend (`http://127.0.0.1:3020/v1`, with `python frontend/server.py`
+`OPENAI_API_BASE_URL` to the frontend (`http://127.0.0.1:3020/v1`, with `python frontend/collabosm.py`
 running), never to the tunnel: the frontend holds the bearer key, and its address outlives every VM.
 
 ```powershell

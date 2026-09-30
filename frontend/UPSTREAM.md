@@ -2,7 +2,7 @@
 
 `upstream/` is a production build of **llama.cpp's Web UI**. It is vendored byte
 for byte: nothing in it is edited, patched or renamed, and `shell.html` +
-`server.py` are the only frontend files this repo owns.
+`collabosm.py` are the only frontend files this repo owns.
 
 ## Provenance
 
@@ -56,7 +56,7 @@ and the app does not say so: it just renders the composer with
 `disabled` + `cursor-not-allowed`, which reads like "the server is not
 reachable". Symptom seen in the server log was `POST /ui/tools 404`.
 
-`server.py` therefore serves the shell at `/` and the WebUI via `/?embed=1`,
+`collabosm.py` therefore serves the shell at `/` and the WebUI via `/?embed=1`,
 which keeps every path resolving exactly as it does when the WebUI is served
 alone.
 
@@ -68,7 +68,7 @@ alone.
 3. Check `index.html` still has a `</head>` — not for injection (we no longer
    inject anything) but because the shell's iframe depends on the file being
    served as-is at the root.
-4. Re-run `python frontend/server.py` and confirm the composer is *enabled*
+4. Re-run `python frontend/collabosm.py` and confirm the composer is *enabled*
    (type a character into it) before committing.
 
 ## Why we no longer inject an overlay

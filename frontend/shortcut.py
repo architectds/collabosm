@@ -1,13 +1,13 @@
 """A desktop shortcut that starts collabosm and opens it: `python frontend/shortcut.py`.
 
-frontend/server.py makes one on its first real start, and remembers that it did
+frontend/collabosm.py makes one on its first real start, and remembers that it did
 (~/.collabosm/shortcut.json), so a shortcut the user deleted stays deleted; this
-command makes it again. The shortcut runs this interpreter on frontend/server.py,
+command makes it again. The shortcut runs this interpreter on frontend/collabosm.py,
 which opens http://127.0.0.1:3020 in the browser -- or, when collabosm is already
 running, only opens the page. Its picture is the rail's mark (frontend/icon/).
 
 - Windows: collabosm.lnk on the desktop. It starts collabosm with no window
-  (pythonw.exe; server.py then runs itself windowless). Its output goes to
+  (pythonw.exe; collabosm.py then runs itself windowless). Its output goes to
   ~/.collabosm/server.log, and the page's Quit button closes it.
 - macOS: collabosm.app on the desktop. Quit it from the Dock. Its output goes to
   ~/.collabosm/server.log.
@@ -26,7 +26,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SERVER = os.path.join(HERE, "server.py")
+APP = os.path.join(HERE, "collabosm.py")
 ICONS = os.path.join(HERE, "icon")
 NAME = "collabosm"
 MARKER = "shortcut.json"
@@ -69,7 +69,7 @@ def python_exe() -> str:
 
 def windowless_exe() -> str:
     """What the Windows shortcut runs: the pythonw.exe beside this interpreter, which
-    has no console window (server.py then starts itself windowless: run_windowless).
+    has no console window (collabosm.py then starts itself windowless: run_windowless).
     python.exe where there is none, which shows a window as before."""
     exe = python_exe()
     quiet = os.path.join(os.path.dirname(exe), "pythonw.exe")
@@ -80,7 +80,7 @@ def create_windows(desktop: str) -> str:
     """A .lnk, written by Windows' own WScript.Shell; every path goes in through the
     environment, so no quoting of it can go wrong."""
     path = os.path.join(desktop, NAME + ".lnk")
-    env = dict(os.environ, CO_LNK=path, CO_PY=windowless_exe(), CO_ARGS='"%s"' % SERVER,
+    env = dict(os.environ, CO_LNK=path, CO_PY=windowless_exe(), CO_ARGS='"%s"' % APP,
                CO_DIR=ROOT, CO_ICON=os.path.join(ICONS, "collabosm.ico") + ",0", CO_DESC=BLURB)
     script = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:CO_LNK); "
               "$s.TargetPath = $env:CO_PY; $s.Arguments = $env:CO_ARGS; "
@@ -128,7 +128,7 @@ def create_macos(desktop: str) -> str:
                  'mkdir -p "$HOME/.collabosm"\n'
                  "cd %s || exit 1\n"
                  "exec %s %s >> %s 2>&1\n" % (shlex.quote(ROOT), shlex.quote(python_exe()),
-                                              shlex.quote(SERVER), shlex.quote(log)))
+                                              shlex.quote(APP), shlex.quote(log)))
     os.chmod(exe, 0o755)
     info = {"CFBundleName": NAME, "CFBundleDisplayName": NAME, "CFBundleExecutable": NAME,
             "CFBundleIdentifier": "io.collabosm.launcher", "CFBundlePackageType": "APPL",
@@ -156,7 +156,7 @@ def create_linux(desktop: str) -> str:
     is one (marked trusted where GNOME's gio can, so it starts without a prompt)."""
     entry = ("[Desktop Entry]\nType=Application\nName=%s\nComment=%s\n"
              "Exec=%s %s\nPath=%s\nIcon=%s\nTerminal=true\nCategories=Development;Network;\n"
-             % (NAME, BLURB, _exec_quote(python_exe()), _exec_quote(SERVER), ROOT,
+             % (NAME, BLURB, _exec_quote(python_exe()), _exec_quote(APP), ROOT,
                 os.path.join(ICONS, "collabosm.png")))
     apps = os.path.join(os.environ.get("XDG_DATA_HOME")
                         or os.path.join(os.path.expanduser("~"), ".local", "share"), "applications")
@@ -186,13 +186,15 @@ def create(desktop=None) -> str:
     return create_linux(desktop)
 
 
-# 2: the Windows shortcut runs pythonw.exe (no window). A shortcut made before that
-# is rewritten once, if it is still there; one the user deleted stays deleted.
-VERSION = 2
+# 2: the Windows shortcut runs pythonw.exe (no window).
+# 3: every shortcut runs frontend/collabosm.py, the app's file.
+# A shortcut made before the current version is rewritten once, if it is still there;
+# one the user deleted stays deleted.
+VERSION = 3
 
 
 def ensure_once(state_dir: str, log=print, desktop=None):
-    """frontend/server.py's first real start: make the shortcut once, and remember that
+    """The app's first real start: make the shortcut once, and remember that
     it was made, so that one the user deleted is not put back. Never raises."""
     marker = os.path.join(state_dir, MARKER)
     old = None
@@ -204,7 +206,7 @@ def ensure_once(state_dir: str, log=print, desktop=None):
             old = {}
         if not isinstance(old, dict) or old.get("v", 1) >= VERSION:
             return None
-    if old is not None and not (os.name == "nt" and os.path.exists(old.get("path") or "")):
+    if old is not None and not os.path.exists(old.get("path") or ""):
         _mark(marker, dict(old, v=VERSION))               # nothing of the old kind is left
         return None
     try:
@@ -214,7 +216,7 @@ def ensure_once(state_dir: str, log=print, desktop=None):
         return None
     _mark(marker, {"path": path, "at": int(time.time()), "v": VERSION})
     log("[fe] shortcut   %s (%s; python frontend/shortcut.py makes it again)"
-        % (path, "made once" if old is None else "now starts collabosm without a window"))
+        % (path, "made once" if old is None else "rewritten for frontend/collabosm.py"))
     return path
 
 

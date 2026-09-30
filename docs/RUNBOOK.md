@@ -242,7 +242,7 @@ time to learn:
   drifted until the shell could not start it). `COLLABOSM_FAKE_FAIL=serve` rehearses a failure.
 - **Every POST must be same-origin JSON.** Omitting `Access-Control-Allow-Origin` stops a foreign page
   from reading answers, not from sending a `text/plain` POST -- and `/control/select` starts billing.
-  `frontend/server.py` refuses non-JSON POSTs, foreign `Origin`s and a `Host` that is not this machine
+  `frontend/collabosm.py` refuses non-JSON POSTs, foreign `Origin`s and a `Host` that is not this machine
   (DNS rebinding) before doing anything.
 - **A rehearsal must not touch the money ledger.** A fake run started without `--state-dir` wrote an
   *open session* into `~/.collabosm/ledger.json` and the rail then charged CU for a VM that never

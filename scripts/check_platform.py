@@ -161,7 +161,7 @@ def step_compile():
 def step_app(env, tmp, install):
     section("2. the app starts for real, and serves what the browser asks for")
     port = free_port()
-    proc = spawn(["frontend/server.py", "--port", str(port)], env, "app", tmp)
+    proc = spawn(["frontend/collabosm.py", "--port", str(port)], env, "app", tmp)
     st = up(port)
     if not check("control plane answers on 127.0.0.1:%d" % port, st, "no answer in 60 s"):
         return
@@ -219,7 +219,7 @@ def step_rehearsal(env, tmp):
     port = free_port()
     state = os.path.join(tmp, "state-rehearsal")
     renv = dict(env, COLLABOSM_FAKE_SECONDS="2")
-    proc = spawn(["frontend/server.py", "--fake-provision", "--port", str(port),
+    proc = spawn(["frontend/collabosm.py", "--fake-provision", "--port", str(port),
                   "--state-dir", state], renv, "rehearsal", tmp)
     if not check("rehearsal app answers", up(port), "no answer in 60 s"):
         return
@@ -262,7 +262,7 @@ def step_chat(env, tmp):
     ok = wait_for(lambda: call(sport, "GET", "/health", timeout=5)[0] == 200, 60)
     if not check("stub engine (the shipping API server) answers", ok):
         return
-    proc = spawn(["frontend/server.py", "--fake-provision", "--fake-vm",
+    proc = spawn(["frontend/collabosm.py", "--fake-provision", "--fake-vm",
                   "http://127.0.0.1:%d" % sport, "--port", str(port),
                   "--state-dir", os.path.join(tmp, "state-chat")], env, "chat-app", tmp)
     st = wait_for(lambda: (status(port) or {}).get("stage") == "ready" and status(port), 90)
@@ -304,18 +304,24 @@ def step_shortcut(env, tmp):
                  p.returncode == 0 and path and os.path.exists(path), (p.stdout + p.stderr)[-400:]):
         return
     if os.name == "nt":
-        ps = "(New-Object -ComObject WScript.Shell).CreateShortcut($env:CO_LNK).TargetPath"
+        ps = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:CO_LNK); "
+              "$s.TargetPath + '|' + $s.Arguments")
         t = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                            env=dict(env, CO_LNK=path), capture_output=True, text=True,
                            timeout=60).stdout.strip()
-        check("  it runs pythonw.exe: no window", t.lower().endswith("pythonw.exe"), t)
+        target, _, args = t.partition("|")
+        check("  it runs pythonw.exe: no window", target.lower().endswith("pythonw.exe"), t)
+        check("  on frontend/collabosm.py", "collabosm.py" in args, t)
     elif sys.platform == "darwin":
         run = os.path.join(path, "Contents", "MacOS", "collabosm")
         check("  an .app whose program is executable", os.access(run, os.X_OK), run)
+        with open(run, encoding="utf-8") as fh:
+            text = fh.read()
+        check("  and runs frontend/collabosm.py", "collabosm.py" in text, text[-300:])
     else:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        check("  a .desktop entry that runs server.py", "Exec=" in text and "server.py" in text,
+        check("  a .desktop entry that runs collabosm.py", "Exec=" in text and "collabosm.py" in text,
               text[:300])
 
 

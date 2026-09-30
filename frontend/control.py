@@ -82,7 +82,7 @@ Words are the shell's job
 Rehearsal
     `fake=True` swaps provision.py for frontend/fake_provision.py, which
     emits the same log lines in ~24 s. That is how this file is exercised
-    without a card: server.py --fake-provision, or --mock with a ledger that is
+    without a card: collabosm.py --fake-provision, or --mock with a ledger that is
     never written. COLLABOSM_FAKE_VM_URL=<a local endpoint> makes the rehearsal
     VM "serve" there, so coupling, link loss and rediscovery can be rehearsed too.
 """

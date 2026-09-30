@@ -31,7 +31,7 @@ the balance, the keep-alive and scripts/provision.py (up, down, fetch, sessions)
 Rehearsal
     fake=<stage> plays the guide without touching anything: an install takes a few
     seconds, the consent approves itself, and the account is rehearsal@example.com
-    (server.py --mock with COLLABOSM_FAKE_COLAB=missing|no_python|signed_out|expired).
+    (collabosm.py --mock with COLLABOSM_FAKE_COLAB=missing|no_python|signed_out|expired).
     COLLABOSM_COLAB_WSL=0 skips WSL for real, to walk a fresh machine's path.
 """
 from __future__ import annotations

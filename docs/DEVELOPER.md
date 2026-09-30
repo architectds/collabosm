@@ -394,14 +394,14 @@ takes both); the trace is returned in `message.reasoning_content` and never leak
 ## The frontend
 
 **This repo ships its own frontend** -- the one local client -- and still does not *write* a chat
-app. `frontend/` is our shell (`shell.html`, `server.py`, `control.py`: the only files we own) wrapped around a
+app. `frontend/` is our shell (`shell.html`, `collabosm.py`, `control.py`: the only files we own) wrapped around a
 llama.cpp Web UI vendored byte for byte -- our diff against upstream is zero. Everything lives in
 **one right-hand column** -- the Colab guide, session, card/recipe picker, money, speed, connection, log -- and the
 WebUI sits in an iframe beside it; ⌘B / Ctrl+B collapses the column. The shell is colour-blocked
 against the WebUI -- warm charcoal by day beside its white page, bone paper by night beside its
 near-black one, switching when the WebUI's own theme does -- and speaks **English, 中文 and 日本語**
 (switch in the header; `control.py` sends codes and numbers, and `shell.html` owns every word). Run it with
-`python frontend/server.py` (port 3020); see [frontend/UPSTREAM.md](../frontend/UPSTREAM.md) for the
+`python frontend/collabosm.py` (port 3020); see [frontend/UPSTREAM.md](../frontend/UPSTREAM.md) for the
 pinned upstream commit and how to rebuild it.
 
 **Starting it.**
@@ -416,7 +416,7 @@ pinned upstream commit and how to rebuild it.
   `~/.collabosm/shortcut.json` remembers that it was made, so a shortcut the user deleted stays
   deleted. `--no-shortcut` (or `COLLABOSM_NO_SHORTCUT=1`) skips it, and `python
   frontend/shortcut.py` makes it again.
-- **No window on Windows.** The `.lnk` runs `pythonw.exe`, which has no console. `server.py` sees
+- **No window on Windows.** The `.lnk` runs `pythonw.exe`, which has no console. `collabosm.py` sees
   that (`sys.stdout is None`) and starts itself again as `python.exe` with `CREATE_NO_WINDOW`
   (`run_windowless`). That process keeps a console nobody sees, which the `wsl.exe` and PowerShell
   calls it makes share, so none of them flashes a window; under `pythonw` each would open its own.
@@ -424,6 +424,10 @@ pinned upstream commit and how to rebuild it.
   is kept as `server.log.1`. A shortcut made before this ran `python.exe` in a minimized window;
   `shortcut.json` carries a version, and an old shortcut that is still on the desktop is rewritten
   once. Started from a terminal, the app keeps that terminal as before.
+- **Its own name.** The app's file is `frontend/collabosm.py`, a name no model server uses: scripts
+  that restart a local model server by stopping every process running a file of that server's
+  generic name (Strata's is `serve/server.py`) leave collabosm running. Shortcut version 3
+  rewrites an older shortcut, on every system, to run `collabosm.py`.
 - **Closing it.** The header's Quit (⏻) sends `POST /control/quit`: the server answers, stops
   serving and exits. A running GPU is not stopped; the page says so before it quits. Routine GETs
   (the page's status poll every 1.5 s, the WebUI's service-worker check every minute) are not
@@ -451,11 +455,11 @@ kit that can spend money, so it is also where the guardrails are:
 Rehearse the whole flow with no card and no CU:
 
 ```bash
-python frontend/server.py --fake-provision   # real control plane, fake provisioning (~24 s), rehearsal ledger
-python frontend/server.py --mock             # the same, with a ledger that is never written
+python frontend/collabosm.py --fake-provision   # real control plane, fake provisioning (~24 s), rehearsal ledger
+python frontend/collabosm.py --mock             # the same, with a ledger that is never written
 python scripts/dev_stub.py --port 8099 &     # optional: something to chat with while rehearsing
-python frontend/server.py --mock --backend http://127.0.0.1:8099
-COLLABOSM_FAKE_FAIL=serve python frontend/server.py --mock   # rehearse a failure + its auto-stop
+python frontend/collabosm.py --mock --backend http://127.0.0.1:8099
+COLLABOSM_FAKE_FAIL=serve python frontend/collabosm.py --mock   # rehearse a failure + its auto-stop
 ```
 
 Both modes print the same log lines `up` does (`[restore] box: ...`, `stage=weights`,
@@ -500,9 +504,9 @@ frontend's own Python. The files it uploads go to the VM with LF endings even wh
 left CRLF in them.
 
 ```bash
-COLLABOSM_FAKE_COLAB=missing python frontend/server.py --mock   # rehearse the guide from nothing
-COLLABOSM_FAKE_COLAB=expired python frontend/server.py --mock   # ... or from a dead sign-in
-COLLABOSM_COLAB_WSL=0 python frontend/server.py                 # walk a fresh machine's real path
+COLLABOSM_FAKE_COLAB=missing python frontend/collabosm.py --mock   # rehearse the guide from nothing
+COLLABOSM_FAKE_COLAB=expired python frontend/collabosm.py --mock   # ... or from a dead sign-in
+COLLABOSM_COLAB_WSL=0 python frontend/collabosm.py                 # walk a fresh machine's real path
 ```
 
 ### Pointing other clients at it

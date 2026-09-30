@@ -17,7 +17,7 @@ You pay Google for the GPU only while it runs. collabosm itself is free and open
 
 1. Make sure your Google account has **Colab compute units** (a paid plan, or pay-as-you-go).
 2. Install **Python 3.12 or newer**.
-3. Download collabosm, open a terminal in its folder, and run `python frontend/server.py`. The page
+3. Download collabosm, open a terminal in its folder, and run `python frontend/collabosm.py`. The page
    (**http://127.0.0.1:3020**) opens in your browser by itself, and a **collabosm** shortcut appears
    on your desktop for next time.
 4. Follow the **Colab** steps on the right: **Install**, then **Connect Google account**.
@@ -73,7 +73,7 @@ A terminal is a window where you type commands.
 - **macOS:** press ⌘+Space, type **Terminal**, press Enter.
 - **Linux:** usually Ctrl+Alt+T.
 
-In this guide, a command such as `python frontend/server.py` is typed into the terminal and run
+In this guide, a command such as `python frontend/collabosm.py` is typed into the terminal and run
 with Enter. On macOS and Linux, type `python3` where this guide says `python`.
 
 ---
@@ -92,7 +92,7 @@ In the terminal, go into the collabosm folder and start it:
 
 ```bash
 cd collabosm
-python frontend/server.py
+python frontend/collabosm.py
 ```
 
 (`cd` means "go into this folder". If you unpacked a ZIP, use that folder's name and place, for
@@ -155,7 +155,7 @@ your existing sign-in.
 
 Each time you want to use collabosm, double-click the **collabosm** shortcut on your desktop. The
 page opens by itself. If collabosm is already running, the shortcut just opens the page again.
-(Without the shortcut: in a terminal, `cd collabosm` and `python frontend/server.py`, as the first
+(Without the shortcut: in a terminal, `cd collabosm` and `python frontend/collabosm.py`, as the first
 time.)
 
 The first check of your Colab connection can take up to a minute.
@@ -334,7 +334,7 @@ request itself, so the page never holds it until you press **Copy key**.)
 | what you see | what to do |
 |---|---|
 | `python` is not recognised (Windows) | Python is not on PATH. Reinstall it with **"Add python.exe to PATH"** ticked, or type `py` instead of `python`. |
-| The page does not open | Start collabosm again (its shortcut, or `python frontend/server.py` in a terminal): if it is running, that only opens the page. On Windows, what went wrong is in `.collabosm\server.log` in your home folder. If another program uses port 3020, start with `python frontend/server.py --port 3021` and open http://127.0.0.1:3021. |
+| The page does not open | Start collabosm again (its shortcut, or `python frontend/collabosm.py` in a terminal): if it is running, that only opens the page. On Windows, what went wrong is in `.collabosm\server.log` in your home folder. If another program uses port 3020, start with `python frontend/collabosm.py --port 3021` and open http://127.0.0.1:3021. |
 | The page did not open by itself | Open http://127.0.0.1:3020 yourself. `--no-browser` starts collabosm without opening it. |
 | No shortcut on the desktop | Run `python frontend/shortcut.py` in the collabosm folder. |
 | "Looking for the Colab CLI…" for a while | The first check can take up to a minute, most of all on Windows with WSL. |
@@ -387,7 +387,7 @@ small collabosm app and your browser.
 ### A. Try it without paying
 
 ```bash
-python frontend/server.py --mock
+python frontend/collabosm.py --mock
 ```
 
 The whole panel works in rehearsal: the Colab section is already filled in, **Start** runs through

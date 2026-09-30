@@ -33,7 +33,7 @@ Needs Python 3.12 or newer, and git (or the repository as a ZIP).
 ```bash
 git clone https://github.com/architectds/collabosm.git
 cd collabosm
-python frontend/server.py --no-browser
+python frontend/collabosm.py --no-browser
 ```
 
 - Keep it running in the background. It is up when `GET http://127.0.0.1:3020/control/status`
