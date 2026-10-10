@@ -67,8 +67,9 @@ least `{}`, and must not carry another site's `Origin` header; a command-line cl
 
 - A recipe is a card plus a model. They are listed under `recipes` in the status, or by
   `python scripts/recipe.py list`.
-- A start moves `stage` through `requesting` → `uploading` → `bootstrapping` → `loading` → `ready`,
-  which takes about 6 to 11 minutes.
+- A start moves `stage` through `requesting` → `uploading` → `bootstrapping` → `loading` → `ready`.
+  Most recipes take about 6 to 11 minutes; the source-built A100-40G Strata v0.1.41 recipe has a
+  conservative 40-minute estimate (about 29 minutes from assignment in its trial).
 - When something goes wrong, `note` and `log_tail` in the status say what.
 
 ## Use the model
@@ -82,7 +83,10 @@ While `stage` is `ready`:
 | model | the running one: `live_model` in the status, or `GET /v1/models` |
 
 - **Endpoints:** `/v1/chat/completions` and `/v1/responses` both work, streaming or not, with
-  tools, including Codex's `apply_patch`.
+  tools, including Codex's `apply_patch` on the app's regular backend. Strata v0.1.41 passed chat,
+  vision, function-tool round-trip, and Responses smoke checks; a full Codex `apply_patch` workflow
+  on Strata has not been tested. Strata's Responses is stateless full-history (no response-ID
+  retrieval/continuation, cancel, or compact operations).
 - **Configuration:** Codex and ModelDock setup are in [README.md](README.md#5-use-the-model-in-other-programs).
 - **Use this address, not the tunnel.** Point programs here, not at the GPU's `….trycloudflare.com`
   address: that one changes with every GPU and needs the key.

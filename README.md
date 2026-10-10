@@ -22,7 +22,8 @@ You pay Google for the GPU only while it runs. collabosm itself is free and open
    on your desktop for next time.
 4. Follow the **Colab** steps on the right: **Install**, then **Connect Google account**.
 5. Under **GPUs** press **Start**, then **Start — billing begins**. A few minutes later (about 6 for
-   the A100-40G, 11 for the A100-80G) the panel says **Ready**: chat. Press **Stop** when you are
+   the default A100-40G recipe, 11 for the A100-80G) the panel says **Ready**: chat. The A100-40G
+   Strata recipe is the exception: allow up to its 40-minute estimate. Press **Stop** when you are
    done.
 
 Every step is explained below.
@@ -179,8 +180,9 @@ Shortcut gone? `python frontend/shortcut.py` in the collabosm folder puts it bac
 
 3. Press **Start — billing begins** to rent the GPU, or **Cancel**, which costs nothing.
 4. Wait for **Ready**. The panel shows the steps — Request, Upload, Install, Load, Ready — and how
-   far along it is. It takes about 11 minutes, because the model is downloaded and loaded onto every
-   new GPU.
+   far along it is. Time depends on the recipe: the A100-40G Strata recipe now builds its pinned
+   engine from source and has a conservative 40-minute estimate (about 29 minutes from GPU
+   assignment in the 2026-10-09 trial).
 
 Sometimes Colab hands out a smaller GPU than the model needs. collabosm notices within a minute,
 gives it back (about 0.13 compute units) and asks you to press **Start** again.
@@ -283,8 +285,9 @@ Codex's file-editing tool (`apply_patch`) needs one more setting; see
 ### ModelDock
 
 In ModelDock's dashboard, add a custom model with the address `http://127.0.0.1:3020/v1`, any key
-(for example `sk-local`), and the Responses transport. Chat completions works too, and the Strata
-recipe needs it: Strata has no Responses API.
+(for example `sk-local`), and the Responses transport. Chat completions works too. Strata v0.1.41
+also passed Responses completion and streaming checks; its Responses API is stateless full-history
+(no response-ID retrieval/continuation, cancel, or compact operations).
 - **Add it while a GPU is running:** ModelDock asks the address for its models when you add it.
 - **This address never changes,** so you don't have to edit ModelDock again when you start a new
   GPU. The `….trycloudflare.com` address does change with every GPU.
@@ -401,7 +404,7 @@ stand-in, see [docs/DEVELOPER.md](docs/DEVELOPER.md).)
 |---|---|---|---|---|---|
 | A100-40G (the default) | Qwen3.8-27B | measured once | 5.37 (Colab's figure) | $0.54 | ~6 min |
 | A100-80G High-RAM | Qwen3.8-Flash-Next | tested | 6.77 (Colab's own rate) | $0.68 | ~11 min |
-| A100-40G | Qwen3.8-Flash-Next, on Strata | tested | 5.37 (Colab's figure) | $0.54 | ~20 min |
+| A100-40G | Qwen3.8-Flash-Next, on Strata v0.1.41 | tested | 5.37 (Colab's figure) | $0.54 | ~40 min estimate |
 
 - Compute units are Colab's currency: about $0.10 each when bought pay-as-you-go.
 - Loading counts too: about 1.8 compute units per start on the 80G GPU, which the cost card shows
@@ -426,16 +429,24 @@ What you get:
 - **Qwen3.8-Flash-Next on the A100-40G, with [Strata](https://github.com/Niko1221/Strata)**
   - The same model on the smaller, cheaper card: it does not fit there, so Strata keeps the parts
     it cannot hold on the GPU in the machine's memory and has the processor work them out.
-  - Speed: about 2,100 tokens read per second at 36,000 tokens of real text (1,400 at 16,000;
-    2,500 at 70,000 and at 144,000), and 59–72 written.
+  - Strata v0.1.41 on an A100-SXM4-40GB read 1,321–2,567 tokens/s across tested prompts of
+    12,878–110,921 tokens; 512-token decode probes were 87.6 tokens/s after 2,900 input tokens
+    and 93.0 after 21,672. The historical v0.1.24 references were 58.8 and 66.1 tokens/s at
+    different contexts/texts, so the apparent +41–49% decode change is not a same-box A/B result.
+    Prefill varied by prompt length and cache state; no general prefill improvement is established.
   - Length: conversations up to about 260,000 tokens.
   - Pictures: understood.
-  - The chat page, ModelDock (with its chat transport) and other programs that use chat
-    completions work with it; Codex does not yet, as it needs the Responses API. It answers one
-    request at a time.
-  - The first start takes about 20 minutes: downloading the 84 GB model, then Strata's own
-    preparation. For about a minute and a half after it is ready, it reads prompts more slowly,
-    while part of the model moves into memory.
+  - The chat page, ModelDock, and other clients can use the tested chat-completions and Responses
+    paths. v0.1.41 passed text, vision, function-tool round-trip, and Responses
+    completion/streaming checks. It exposes the Responses path Codex needs, but a full Codex
+    `apply_patch` workflow has not been tested on this recipe. Responses is stateless full-history:
+    response-ID retrieval/continuation, cancel, and compact operations are not supported.
+    Concurrency was not measured.
+  - The v0.1.41 recipe pins official Strata source commit
+    `fb58e0dbc8399662c0e47c76578c6e878b14f6cf` and builds the engine on the VM; the pinned
+    84 GB model revision is unchanged. The trial reached Ready about 29 minutes after A100
+    assignment; the UI uses a conservative 40-minute estimate because Colab scheduling and source
+    builds vary. The previous ~20-minute estimate described the prebuilt v0.1.24 path and is stale.
 
 ### C. The command line
 

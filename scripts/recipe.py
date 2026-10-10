@@ -79,11 +79,22 @@ def validate(reg: dict) -> list:
         if m.get("engine", "exl3") not in ENGINES:
             out.append("model %s: engine must be one of %s" % (m.get("id"), "/".join(ENGINES)))
         if m.get("engine") == "strata":
-            # the engine is someone else's code and binary: pinned to a commit and a checksum
+            # Pin Strata source builds separately from the legacy prebuilt path. The
+            # default prebuilt recipes still require both their release URL and SHA-256.
             s = m.get("strata") or {}
-            for k, pat in (("repo", r"https://github\.com/[\w.-]+/[\w.-]+$"), ("commit", r"[0-9a-f]{40}$"),
-                           ("release", r"https://\S+/$"), ("sha256", r"[0-9a-f]{64}$"),
-                           ("cuda", r"1[23]$"), ("quant", r"[A-Z0-9_]+$")):
+            if "build" in s and not isinstance(s["build"], bool):
+                out.append("model %s: strata.build must be boolean" % m.get("id"))
+            source_build = s.get("build", False) is True
+            cuda_pattern = r"^(?:auto|1[23])$" if source_build else r"1[23]$"
+            required = [("repo", r"https://github\.com/[\w.-]+/[\w.-]+$"),
+                        ("commit", r"[0-9a-f]{40}$"), ("cuda", cuda_pattern),
+                        ("quant", r"[A-Z0-9_]+$")]
+            if source_build:
+                if s.get("release") or s.get("sha256"):
+                    out.append("model %s: source-built strata must not specify release or sha256" % m.get("id"))
+            else:
+                required += [("release", r"https://\S+/$"), ("sha256", r"[0-9a-f]{64}$")]
+            for k, pat in required:
                 if not re.match(pat, str(s.get(k, ""))):
                     out.append("model %s: strata.%s missing or malformed" % (m.get("id"), k))
         # bootstrap.sh keeps one pack per directory (its .collabosm-revision marker)
@@ -143,8 +154,10 @@ def launch_env(reg: dict, rid: str) -> dict:
     if m.get("engine") == "strata":
         s = m["strata"]
         env.update({"STRATA_REPO": s["repo"], "STRATA_COMMIT": s["commit"],
-                    "STRATA_PREBUILT_URL": s["release"], "STRATA_SHA256": s["sha256"],
+                    "STRATA_PREBUILT_URL": s.get("release", ""), "STRATA_SHA256": s.get("sha256", ""),
                     "STRATA_CUDA": s["cuda"], "STRATA_MODEL": s["quant"],
+                    "STRATA_BUILD": "1" if s.get("build", False) else "0",
+                    "STRATA_DIR": s.get("dir", "/content/strata"),
                     # the image encoder on the card (a recipe's env can say cpu)
                     "STRATA_VISION": "gpu" if m.get("vision") else "none"})
     env.update(r.get("env") or {})

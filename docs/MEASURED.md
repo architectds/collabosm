@@ -195,6 +195,52 @@ every cold prompt, the server's own timings.
   conversations (YaRN 1.5625, cache 819,200). That setting has not been loaded yet. Q4 reads half the
   KV per token, so long-context decode should come out a little faster.
 
+## Strata v0.1.41 on the A100-40G (2026-10-09)
+
+One paid A100-SXM4-40GB trial (40,960 MiB VRAM, 83.5 GiB host RAM), NVIDIA driver 580.82.07,
+installed CUDA compiler 13.0.88. The engine was built on the VM from official
+`Niko1221/Strata` commit `fb58e0dbc8399662c0e47c76578c6e878b14f6cf`; its built binary SHA-256 was
+`81c5e113c48292a723d2cb4ff2613d7be4a79ee559f32292cd6ff07670e10271`. The existing
+`ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF` IQ3_S revision
+`2a55d75962e22f7a4a1d9963ab6eae3678537831` was unchanged. Runtime config:
+262,144 context, int8 KV, 32,768 resident KV positions, GPU vision, MTP spec 4. GPU assignment to
+ready took about **29 min** (one observation, including source build); the n-gram table was warmed
+after the engine loaded.
+
+Python standard-library source text was sliced without repetition *within this run*, with unique
+nonces. All table rows below use the engine's own timing fields and actual API token usage, not
+estimated target lengths; prompt KV cache reported zero. The corpus comprised 64 fixed files,
+SHA-256 `119ce3f85eb8c2792a1be276c36756560eeb407874f34cda15dd9ee52613848f`.
+
+| Actual input tokens | Output tokens | Prefill t/s | Decode t/s |
+|---:|---:|---:|---:|
+| 12,878 | 16 | 1,320.9 | 106.7 |
+| 26,816 | 16 | 1,492.8 | 115.0 |
+| 26,451 | 16 | 1,591.8 | 96.1 |
+| 52,323 | 16 | 1,951.0 | 116.7 |
+| 56,363 | 16 | 2,332.8 | 99.4 |
+| 110,921 | 16 | 2,515.8 | 104.0 |
+| 110,072 | 16 | 2,566.9 | 68.7 |
+| 2,900 | **512** | 939.1 | **87.6** |
+| 21,672 | **512** | 2,068.8 | **93.0** |
+
+An additional 12,160-token / 2,438.5 prefill t/s row is **excluded from headline results**:
+its source prefix had already appeared in an aborted run. Zero KV-cache tokens do not establish
+that Strata's row or expert caches were cold. The 16-token decode rates are not substitutes for
+the two 512-token decode probes. Samples were not repeated enough to estimate variance.
+
+The prior v0.1.24 trial recorded 58.8 decode t/s after a short prompt and 66.1 after about 41K
+input tokens. Comparing those with 87.6 and 93.0 above suggests **+49% and +41%**, respectively,
+but the runs used different prompts, contexts and VMs: **not a same-box A/B**. Likewise, the old
+prefill observations (1,448 at 16K; 2,082 at 36K; 2,492 at 70K; 2,497 at 144K) do not establish
+an across-the-board prefill improvement for v0.1.41.
+
+Functional smoke checks passed for chat text, Unicode streaming, a 256×128 red-left/blue-right
+image fixture, function-tool call and result round-trip, and `/v1/responses` final text and
+streaming. Responses was tested as a stateless full-history API; response-ID retrieval/cancel/
+compact, a full Codex `apply_patch` workflow, full-window context load, and concurrency were **not**
+tested. The paid GPU was stopped; Colab reported zero assignments and zero hourly rate afterward.
+
 ## What Colab charges, and what it counts as use (2026-09-25/26)
 
 | item | value | source |

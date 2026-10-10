@@ -143,6 +143,9 @@ api_server.py on 127.0.0.1:8090  ->  cloudflared --url http://127.0.0.1:8090
   (`scripts/dev_stub.py` + `scripts/check_surface.py`).
 - `transport` must be `"responses"` in the ModelDock endpoint entry: the Responses dialect is the
   path Codex actually uses.
+- On the A100-40G Strata v0.1.41 recipe, chat, tool round-trip, and Responses completion/streaming
+  smoke checks passed. Its Responses API is stateless full-history; do not rely on response-ID
+  retrieval/continuation, cancel, or compact operations.
 
 ## Cost guardrails
 

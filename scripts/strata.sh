@@ -1,41 +1,113 @@
 # collabosm: a Strata recipe on the VM. Sourced by bootstrap.sh and serve.sh, which
 # define say, status, fail, PORT, MODEL_DIR and (serve.sh) LOG and KEY.
 #
-# Strata (github.com/Niko1221/Strata; the recipe pins a commit of a fork) is its own
+# Strata (github.com/Niko1221/Strata; the recipe pins an exact commit) is its own
 # engine and its own OpenAI-compatible server, for Qwen3.8-Flash-Next: the experts it
 # cannot keep in VRAM are computed by the CPU from pinned RAM. Its setup.py does the
-# install -- the ready-made engine, CUDA's pip libraries, the MTP draft layer, a
-# config. What collabosm adds: the pinned commit, the engine zip checked against the
-# recipe's SHA-256 before setup.py sees it, the GGUF at the recipe's pinned revision
-# (in parallel, where setup.py would read one stream), CUDA 12 (STRATA_CUDA=12: the
-# fork's option for drivers older than 580), the recipe's engine flags, and the server
-# started behind the box's key, which goes in through the environment, not argv.
+# install -- either a prebuilt release engine checked against the recipe SHA-256 or a
+# source build with the installed driver-compatible CUDA toolkit, plus CUDA's pip
+# libraries, the MTP draft layer, and a config. What collabosm adds: the pinned commit,
+# the GGUF at the recipe's pinned revision (in parallel, where setup.py would read one
+# stream), the recipe's engine flags, and the server behind the box's key, passed in the
+# environment, not argv. Source builds never install a system toolkit or driver.
 
 STRATA_DIR=${STRATA_DIR:-/content/strata}
 STRATA_ENGINE_DIR=/content/strata-engine      # the checked zip; setup.py copies it from here
 
+# Fail before the large GGUF download unless an installed CUDA compiler matches the
+# GPU's driver. Strata's generic installer may otherwise attempt system toolkit setup.
+strata_build_preflight() {
+  command -v g++ >/dev/null 2>&1 || {
+    say "!! source-build needs g++ already installed (will not apt-install build tools)"; return 1;
+  }
+  local requested=${STRATA_CUDA:-auto} driver driver_major driver_minor
+  local candidate release major minor score best_score=-1 best_nvcc="" best_cuda=""
+  local candidates=() seen=() rejected=() found=0
+  case "$requested" in auto|12|13) ;; *) say "!! invalid STRATA_CUDA '$requested' (expected auto, 12 or 13)"; return 1 ;; esac
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    say "!! cannot select CUDA: nvidia-smi is unavailable to identify the installed driver"; return 1
+  fi
+  driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '\r ')
+  if [[ ! "$driver" =~ ^([0-9]+)\.([0-9]+) ]]; then
+    say "!! cannot select CUDA: nvidia-smi returned no parseable driver version ('$driver')"; return 1
+  fi
+  driver_major=${BASH_REMATCH[1]}; driver_minor=${BASH_REMATCH[2]}
+  say "CUDA source-build driver: $driver (requested CUDA $requested)"
+  [ -n "${STRATA_NVCC:-}" ] && candidates+=("$STRATA_NVCC")
+  candidate=$(command -v nvcc 2>/dev/null || true)
+  [ -z "$candidate" ] || candidates+=("$candidate")
+  for candidate in /usr/local/cuda*/bin/nvcc /opt/cuda*/bin/nvcc /usr/bin/nvcc; do
+    [ -x "$candidate" ] && candidates+=("$candidate")
+  done
+  for candidate in "${candidates[@]}"; do
+    [ -x "$candidate" ] || { rejected+=("$candidate: not executable"); continue; }
+    case " ${seen[*]} " in *" $candidate "*) continue ;; esac
+    seen+=("$candidate")
+    release=$("$candidate" --version 2>/dev/null | sed -nE 's/.*release ([0-9]+)\.([0-9]+).*/\1 \2/p' | tail -1)
+    if [[ ! "$release" =~ ^([0-9]+)[[:space:]]+([0-9]+)$ ]]; then
+      rejected+=("$candidate: unparseable nvcc --version"); continue
+    fi
+    major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}
+    say "CUDA compiler found: $candidate ($major.$minor)"
+    if [ "$major" != 12 ] && [ "$major" != 13 ]; then
+      rejected+=("$candidate: CUDA $major is unsupported (need 12 or 13)"); continue
+    fi
+    if [ "$requested" != auto ] && [ "$requested" != "$major" ]; then
+      rejected+=("$candidate: CUDA $major does not match requested $requested"); continue
+    fi
+    # NVIDIA minor-version compatibility: CUDA 12.x needs R525+, CUDA 13.x R580+.
+    if { [ "$major" = 13 ] && [ "$driver_major" -lt 580 ]; } || \
+       { [ "$major" = 12 ] && [ "$driver_major" -lt 525 ]; }; then
+      rejected+=("$candidate: CUDA $major is incompatible with driver $driver (needs R$([ "$major" = 13 ] && echo 580 || echo 525)+)"); continue
+    fi
+    score=$((major * 100 + minor))
+    if [ "$score" -gt "$best_score" ]; then
+      best_score=$score; best_nvcc=$candidate; best_cuda=$major
+    fi
+    found=1
+  done
+  if [ "$found" != 1 ]; then
+    say "!! no installed CUDA 12/13 compiler is compatible with driver $driver; no toolkit/driver will be installed"
+    for candidate in "${rejected[@]}"; do say "  rejected: $candidate"; done
+    [ "${#seen[@]}" -gt 0 ] || say "  rejected: no nvcc found in STRATA_NVCC, PATH, or standard CUDA directories"
+    return 1
+  fi
+  export STRATA_NVCC="$best_nvcc" STRATA_CUDA="$best_cuda"
+  say "selected CUDA $STRATA_CUDA compiler: $STRATA_NVCC"
+}
+
 strata_install() {
   status "stage=runtime"
   say "Strata ${STRATA_COMMIT:0:12} from $STRATA_REPO"
+  case "${STRATA_BUILD:-0}" in 0|1) ;; *) say "!! STRATA_BUILD must be 0 or 1"; return 1 ;; esac
   if [ "$(git -C "$STRATA_DIR" rev-parse HEAD 2>/dev/null)" != "$STRATA_COMMIT" ]; then
     # another commit into the same checkout: its .venv and its downloads stay put
     [ -d "$STRATA_DIR/.git" ] || git init -q "$STRATA_DIR"
     git -C "$STRATA_DIR" fetch -q --depth 1 "$STRATA_REPO" "$STRATA_COMMIT" \
       && git -C "$STRATA_DIR" checkout -q -f FETCH_HEAD || { say "!! could not fetch Strata"; return 1; }
   fi
-  # setup.py keeps an installed engine of the same version, so a new build (the image
-  # encoder added, say) would be passed over: the engine the recipe pins is the one there
-  if [ "$(cat "$STRATA_DIR/engine/.collabosm-sha256" 2>/dev/null)" != "$STRATA_SHA256" ]; then
-    rm -rf "$STRATA_DIR/engine"
-  fi
   local zip="$STRATA_ENGINE_DIR/strata-linux-x64.zip"
-  mkdir -p "$STRATA_ENGINE_DIR"
-  if ! echo "$STRATA_SHA256  $zip" | sha256sum -c --status - 2>/dev/null; then
-    curl -fsSL -o "$zip" "${STRATA_PREBUILT_URL}strata-linux-x64.zip" || { say "!! engine download"; return 1; }
-    echo "$STRATA_SHA256  $zip" | sha256sum -c --status - \
-      || { say "!! the engine is not the one the recipe pins (SHA-256)"; rm -f "$zip"; return 1; }
+  if [ "${STRATA_BUILD:-0}" = 1 ]; then
+    # No release fallback: this pinned source build must never accept the old .24 zip.
+    strata_build_preflight || return 1
+    [ -z "${STRATA_PREBUILT_URL:-}${STRATA_SHA256:-}" ] || {
+      say "!! source-build recipe must not carry prebuilt URL/checksum"; return 1;
+    }
+    say "source build enabled (CUDA ${STRATA_CUDA:-12}); release archives are disabled"
+  else
+    # setup.py keeps an installed engine of the same version, so a new build (the image
+    # encoder added, say) would be passed over: the engine the recipe pins is the one there
+    if [ "$(cat "$STRATA_DIR/engine/.collabosm-sha256" 2>/dev/null)" != "$STRATA_SHA256" ]; then
+      rm -rf "$STRATA_DIR/engine"
+    fi
+    mkdir -p "$STRATA_ENGINE_DIR"
+    if ! echo "$STRATA_SHA256  $zip" | sha256sum -c --status - 2>/dev/null; then
+      curl -fsSL -o "$zip" "${STRATA_PREBUILT_URL}strata-linux-x64.zip" || { say "!! engine download"; return 1; }
+      echo "$STRATA_SHA256  $zip" | sha256sum -c --status - \
+        || { say "!! the engine is not the one the recipe pins (SHA-256)"; rm -f "$zip"; return 1; }
+    fi
+    say "engine checked: ${STRATA_SHA256:0:16}"
   fi
-  say "engine checked: ${STRATA_SHA256:0:16}"
   # setup.sh wants a Python whose venv can bring pip (ensurepip; Debian ships it apart
   # as python3-venv) and otherwise calls `sudo apt-get`. Colab runs as root and has no
   # business being apt-installed into, so the .venv is made here -- setup.sh keeps a
@@ -55,12 +127,20 @@ strata_install() {
   # layer), and --prebuilt as a folder means it copies our zip, not a URL's
   status "stage=weights"
   strata_weights || return 1
+  local -a engine_args
+  if [ "${STRATA_BUILD:-0}" = 1 ]; then
+    engine_args=(--build --cuda "${STRATA_CUDA:-12}" --gguf-dir "$MODEL_DIR/models/$STRATA_MODEL")
+  else
+    engine_args=(--prebuilt "$STRATA_ENGINE_DIR/")
+  fi
   ( cd "$STRATA_DIR" && STRATA_CUDA="${STRATA_CUDA:-12}" bash setup.sh --family qwen \
       --model "$STRATA_MODEL" --vision "${STRATA_VISION:-none}" --context "${STRATA_CONTEXT:-262144}" \
       --kv "${STRATA_KV:-int8}" --data-dir "$MODEL_DIR" --port "$PORT" \
-      --prebuilt "$STRATA_ENGINE_DIR/" --yes --no-start ) || { say "!! Strata setup failed"; return 1; }
+      "${engine_args[@]}" --yes --no-start ) || { say "!! Strata setup failed"; return 1; }
   [ -n "$(strata_config)" ] || { say "!! Strata setup wrote no config"; return 1; }
-  echo "$STRATA_SHA256" > "$STRATA_DIR/engine/.collabosm-sha256"
+  if [ "${STRATA_BUILD:-0}" != 1 ]; then
+    echo "$STRATA_SHA256" > "$STRATA_DIR/engine/.collabosm-sha256"
+  fi
   strata_engine_args "$(strata_config)" || return 1
 }
 

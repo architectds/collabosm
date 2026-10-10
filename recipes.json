@@ -90,12 +90,12 @@
       "ngram": true,
       "recurrent": true,
       "strata": {
-        "repo": "https://github.com/architectds/Strata",
-        "commit": "e416ba57f589f7c2561a1ed14ef72d4358f14027",
-        "release": "https://github.com/architectds/Strata/releases/download/v0.1.24-linux-cuda12.8/",
-        "sha256": "f9cdd1952fec36db0c577417c48c09e14dbe37174dd0ff4bf977c0b12fc40371",
-        "cuda": 12,
-        "quant": "IQ3_S"
+        "repo": "https://github.com/Niko1221/Strata",
+        "commit": "fb58e0dbc8399662c0e47c76578c6e878b14f6cf",
+        "build": true,
+        "cuda": "auto",
+        "quant": "IQ3_S",
+        "dir": "/content/strata-v0.1.41"
       }
     }
   ],
@@ -165,21 +165,76 @@
       "gpu": "a100-40g",
       "model": "qwen38-fn-strata",
       "status": "verified",
-      "eta_min": 20,
+      "eta_min": 40,
       "env": {
         "STRATA_CONTEXT": 262144,
         "STRATA_KV": "int8"
       },
       "facts": {
-        "weights": {"v": 77.9, "unit": "GiB", "measured": true, "src": "83.6 GB on Hugging Face: two IQ3_S shards (3.50 bpw on average; GSQ-RCO picks each tensor's type, the experts mixing Q2_0 and IQ4_NL by layer) with the 28.8 GB n-gram table; ISTA-DASLab, Apache-2.0. Their benchmarks put it level with BF16 (AIME25, GPQA-Diamond, LiveCodeBench v6: 93.26 vs 93.12)"},
-        "prefill_tps": {"v": 2082, "measured": true, "src": "engine 0.1.24 on the A100-40G, 2026-09-29, real text (Python's standard library, nothing cached), the n-gram table in RAM: 1,448 t/s at 16K, 2,082 at 36K, 2,492 at 70K, 2,497 at 144K (2,464 on a 41K prompt; 2,056-2,513 at 55-118K on mixed code and docs). 0.1.20 read 905-1,376 at 4K-59K: 0.1.22 moved the prompt's attention onto tensor cores and 0.1.24 its block selection, the part that grew with length. Short prompts vary most (825-1,702 at ~5K) with the text and a warm row cache"},
-        "decode_tps": {"v": 58.8, "measured": true, "src": "a 512-token answer at a short context, engine 0.1.24 on the A100-40G, 2026-09-29, expert hit rate 0.96; 66.1 after a 41K prompt, 72.3 on a short next turn. The same prompt gave 58.0-61.0 on 0.1.20: 0.1.24 changes prompts, not decode. 16,251 of the 24,576 experts live in VRAM with images on; Colab's Xeon (6 cores, 2.2 GHz, AVX2) computes the rest"},
-        "eta_min": {"v": 20, "measured": true, "src": "engine 0.1.24 on 2026-09-29: READY 18 min 30 s after the box was assigned (20 min 41 s on the app's billing clock, which started at the confirm that got it): the model's 84.5 GB at its pinned revision in 225 s (Xet, ~375 MB/s; 413 s that morning), Strata's setup and model pack ~1 min, the MTP layer (fetched from Qwen's checkpoint and converted) ~8.5 min (4 min that morning), the engine's start 4.5 min (46.84 GiB of experts at 0.35 GiB/s); the n-gram table then goes into RAM in the background (77 s). Colab had no A100 free for 15 min before it: 'Service Unavailable', no box, no billing"},
-        "vram_mib": {"v": 40737, "measured": true, "src": "the whole card at 262K with images, engine 0.1.24, 2026-09-29: what the dense layers, MTP, a 32K-position KV page pool and the image encoder's 700 MiB leave becomes the expert cache (16,251 of 24,576 experts)"},
-        "context": {"v": 262144, "measured": true, "src": "the native window: Strata's engine reports max_context 262,144 on the A100-40G, 2026-09-29, with the 8-bit KV streamed (a 32K-position page pool in VRAM, the rest in pinned RAM, ~13.7 KB/token). Strata's own setup capped it at 128K below 90 GB of RAM; the fork's setup counts the RAM instead (Niko1221/Strata#134). YaRN beyond 262K: Strata's RoPE has no scaling yet"},
-        "vision": {"v": true, "measured": true, "src": "the image encoder on the card (llama.cpp mtmd, 700 MiB reserved from the expert cache): a 640x400 test image read right (shapes, colors, places, its text) in 3.1 s with engine 0.1.24, which thinks before it answers (208 tokens; 0.1.20 answered in 123)"},
-        "concurrency": {"v": 1, "measured": true, "src": "Strata serves one request at a time, by design; and no /v1/responses (chat completions and Anthropic messages only), so Codex cannot use it yet; ModelDock can, with its chat transport"},
-        "host_ram": {"v": "56 of 83.5 GiB", "measured": true, "src": "engine 0.1.24 at 262K with images, 2026-09-29: 56.3 GiB in use; the engine holds the 46.84 GiB pinned expert arena, 3.9 GiB of pinned KV and buffers and its heap, the rest of the box ~1.5 GiB; the ~27 GiB left is page cache, where strata_warm keeps ~90% of the 26.8 GiB n-gram table"}
+        "weights": {
+          "v": 77.9,
+          "unit": "GiB",
+          "measured": true,
+          "src": "83.6 GB on Hugging Face: two IQ3_S shards (3.50 bpw on average; GSQ-RCO picks each tensor's type, the experts mixing Q2_0 and IQ4_NL by layer) with the 28.8 GB n-gram table; ISTA-DASLab, Apache-2.0. Their benchmarks put it level with BF16 (AIME25, GPQA-Diamond, LiveCodeBench v6: 93.26 vs 93.12)"
+        },
+        "engine_version": {
+          "v": "0.1.41",
+          "measured": true,
+          "src": "2026-10-10 A100-SXM4-40GB trial: official source commit fb58e0dbc8399662c0e47c76578c6e878b14f6cf; CUDA 13 source build with driver 580.82.07; engine SHA-256 81c5e113c48292a723d2cb4ff2613d7be4a79ee559f32292cd6ff07670e10271 (see docs/MEASURED.md). Existing GGUF revision 2a55d75962e22f7a4a1d9963ab6eae3678537831 was reused; engine-only update."
+        },
+        "prefill_tps": {
+          "v": 1320.9,
+          "unit": "tokens/s",
+          "measured": true,
+          "src": "Strata 0.1.41 latest041-v2 on A100-SXM4-40GB, one request per text slice: 12,878 input tokens 1,320.9 t/s; 26,816 1,492.8 and 26,451 1,591.8; 52,323 1,951.0 and 56,363 2,332.8; 110,921 2,515.8 and 110,072 2,566.9. First 12,160-token sample at 2,438.5 was excluded from headline due overlap with aborted run. KV prompt-cache count was zero; Strata row/expert cache state was not controlled. These are observed samples, not an average or n=3; no matched same-box 0.1.24 comparison."
+        },
+        "decode_tps": {
+          "v": 87.6,
+          "unit": "tokens/s",
+          "measured": true,
+          "src": "Strata 0.1.41 A100-SXM4-40GB, two 512-token output probes: 87.6 t/s after 2,900 input tokens and 93.0 t/s after 21,672 input tokens. One sample per context. Historical 0.1.24 short-context 58.8 t/s was from a different run/VM, not a paired speed comparison."
+        },
+        "eta_min": {
+          "v": 40,
+          "unit": "min",
+          "measured": false,
+          "src": "Conservative UI estimate. The source-build trial reached READY about 29 minutes after A100 assignment; source compilation, downloads, and Colab scheduling vary."
+        },
+        "vram_mib": {
+          "v": 40163,
+          "measured": true,
+          "src": "2026-10-09 trial (docs/MEASURED.md): nvidia-smi reported NVIDIA A100-SXM4-40GB, 40,163 MiB in use, 40,960 MiB total; point-in-time reading during the v0.1.41 run."
+        },
+        "context": {
+          "v": 262144,
+          "measured": true,
+          "src": "v0.1.41 runtime config sets --max-context 262144; benchmark prompts reached 110,921 actual input tokens, so the full configured window was not stress-tested."
+        },
+        "vision": {
+          "v": true,
+          "measured": true,
+          "src": "v0.1.41 trial (docs/MEASURED.md) passed an end-to-end 256x128 red-left/blue-right image fixture: response identified Left Red / Right Blue with no contradictory answer. This validates that simple fixture only, not the earlier 640x400/general image benchmark."
+        },
+        "responses_api": {
+          "v": true,
+          "measured": true,
+          "src": "v0.1.41 smoke validated non-streaming /responses completion and strict streamed PONG response; response-ID continuation/stateful operations were not tested."
+        },
+        "concurrency": {
+          "v": "not measured",
+          "measured": false,
+          "src": "Trial validated single-request API paths only; no concurrent-load test was run."
+        },
+        "host_ram": {
+          "v": "57,458 MiB used; 28,018 MiB available",
+          "measured": true,
+          "src": "2026-10-09 trial (docs/MEASURED.md) free -m snapshot: 85,477 MiB total, 57,458 MiB used, 28,018 MiB available; includes OS cache/accounting, not engine-only RSS."
+        },
+        "tools_api": {
+          "v": true,
+          "measured": true,
+          "src": "v0.1.41 extra-smoke-v2 validated a function tool probe and full function-call roundtrip (report_answer returned exact text 42)."
+        }
       }
     }
   ]

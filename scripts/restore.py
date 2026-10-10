@@ -230,6 +230,8 @@ def main():
                     help="hm = HIGH_RAM (80 GB VRAM / 167 GB RAM), st = standard (40 GB)")
     ap.add_argument("--min-vram-gib", type=float, default=70.0,
                     help="refuse and stop the box below this (a 40 GB box measures ~39)")
+    ap.add_argument("--max-vram-gib", type=float,
+                    help="refuse a newly-created box above this VRAM size")
     ap.add_argument("--colab", default=os.environ.get("COLAB"),
                     help="a Colab CLI executable (default: the CLI through colab_cmd.py)")
     ap.add_argument("--keepalive", action="store_true",
@@ -310,6 +312,14 @@ def main():
         if info is None:
             print("[restore] !! the VM did not answer the probe; the kernel may still be starting")
             result["probe"] = None
+            if args.max_vram_gib is not None:
+                print("[restore] !! refusing a size-capped recipe without a VRAM measurement")
+                if created:
+                    stop_session(colab, args.name)
+                    result["stopped"] = True
+                if args.json:
+                    print(json.dumps(result))
+                return 11
         else:
             result["probe"] = info
             vram = info.get("vram_GiB")
@@ -329,6 +339,16 @@ def main():
                 if args.json:
                     print(json.dumps(result))
                 return 6
+            if args.max_vram_gib is not None and (vram is None or vram > args.max_vram_gib):
+                print("[restore] !! refusing size-capped recipe: measured VRAM %s exceeds/does not meet cap %.1f GiB"
+                      % ("unknown" if vram is None else "%.1f GiB" % vram, args.max_vram_gib))
+                if created:
+                    print("[restore]    stopping the newly-created %s before upload; exit 11" % args.name)
+                    stop_session(colab, args.name)
+                    result["stopped"] = True
+                if args.json:
+                    print(json.dumps(result))
+                return 11
 
     if args.json:
         print(json.dumps(result))

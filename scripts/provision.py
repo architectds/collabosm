@@ -174,7 +174,6 @@ def cmd_up(a) -> int:
     E.setdefault("RUNTIME", "wheel")             # wheel | source (manifest.json)
     E.setdefault("PORT", "8090")
     try:
-        wait_min = float(E.get("WAIT_MIN") or 50)
         poll_s = float(E.get("COLLABOSM_POLL_S") or 45)
     except ValueError:
         say("!! WAIT_MIN / COLLABOSM_POLL_S must be numbers")
@@ -187,6 +186,13 @@ def cmd_up(a) -> int:
         return 2
     for k, v in registry.launch_env(registry.load(), rid).items():
         E.setdefault(k, v)                       # a variable set by the caller wins
+    try:
+        # Source builds are slower than the verified prebuilt engine; leave enough
+        # room for compilation without changing the timeout on unrelated recipes.
+        wait_min = float(E.get("WAIT_MIN") or (75 if E.get("STRATA_BUILD") == "1" else 50))
+    except ValueError:
+        say("!! WAIT_MIN must be a number")
+        return 2
     say("recipe %s: %s shape=%s (>= %s GiB) · %s@%s"
         % (rid, E["ACCELERATOR"], E["SHAPE"], E["MIN_VRAM_GIB"], E["MODEL_REPO"],
            E["MODEL_REVISION"][:12]))
@@ -204,9 +210,13 @@ def cmd_up(a) -> int:
 
     # ---- 1. the box
     say("restoring/creating the %s box, shape %s (session: %s)" % (E["ACCELERATOR"], E["SHAPE"], session))
-    rc = stream([cli_python(), os.path.join(HERE, "restore.py"), "-n", session,
-                 "--accelerator", E["ACCELERATOR"], "--shape", E["SHAPE"],
-                 "--min-vram-gib", E["MIN_VRAM_GIB"]])
+    restore_args = [cli_python(), os.path.join(HERE, "restore.py"), "-n", session,
+                    "--accelerator", E["ACCELERATOR"], "--shape", E["SHAPE"],
+                    "--min-vram-gib", E["MIN_VRAM_GIB"]]
+    if E.get("STRATA_BUILD") == "1":
+        # This pairing is specifically the 40 GiB card, not the high-memory A100.
+        restore_args.extend(["--max-vram-gib", "45"])
+    rc = stream(restore_args)
     if rc != 0:
         say("!! restore failed (rc=%s). 6 = a box below %s GiB was drawn and stopped; just re-run."
             % (rc, E["MIN_VRAM_GIB"]))
