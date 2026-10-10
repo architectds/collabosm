@@ -435,11 +435,16 @@ What you get:
   - Its routed experts are IQ3_S gate/up, IQ4_XS down and Q5_K for sensitive tensors; attention is
     Q6_K. This is the Maya quant that satisfies the requested 3-bit-or-higher floor (Maya-S and
     Maya-M have 2-bit components).
-  - A direct Project Maya v1.0.30 trial on the card read **1,084.1 tokens/s** for one uncached
+  - A direct Project Maya v1.0.30 trial at the previous **32K configuration** read **1,084.1 tokens/s** for one uncached
     11,515-token prompt and wrote **16.2 tokens/s** for 256 output tokens. One sample is not a
     median. The pinned source build and four-shard 156.3 GB download took 76.8 minutes, plus
     roughly 8 minutes for the first model load; the UI's 110-minute estimate allows for variance.
-  - Text chat only, configured for 32,768-token context. Vision and `/v1/responses` are **not**
+  - Text chat only, now configured for **131,072-token (128K) context**, within the model's
+    1,048,576-token native limit. FP16 KV is unchanged. Maya allocates the larger KV/state first,
+    then sizes its expert cache from the remaining VRAM; the recipe also reserves **2,048 MiB**
+    outside that cache (up from the engine's 700 MiB default). This reduces the resident expert
+    cache, not the model's expert count or quantization. **The 128K setting has not been GPU-tested;
+    the speeds above remain historical 32K results.** Vision and `/v1/responses` are **not**
     provided by this recipe, so it is not a Codex Responses endpoint. The model's direct VM API
     worked; the collabosm provision/tunnel path has offline tests but has not had a paid
     end-to-end run. See [measurements](docs/MEASURED.md#project-maya-v1030-maya-l-on-a100-80g-high-ram-2026-10-10).

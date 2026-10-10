@@ -71,7 +71,10 @@ least `{}`, and must not carry another site's `Origin` header; a command-line cl
   Most recipes take about 6 to 11 minutes; the source-built A100-40G Strata v0.1.41 recipe has a
   conservative 40-minute estimate (about 29 minutes from assignment in its trial). The experimental
   A100-80G Maya-L GLM-5.3-Flash text-only recipe has a 110-minute first-run estimate; its direct
-  GPU/model trial passed, but the collabosm launch/tunnel path is not yet end-to-end verified.
+  GPU/model trial passed at the previous 32K setting. It now configures 128K context and a
+  2,048 MiB non-expert reserve, shrinking the automatically sized expert VRAM cache. Neither the
+  new 128K setting nor the collabosm launch/tunnel path is GPU-verified; do not reuse the old speed
+  measurements as 128K results.
 - When something goes wrong, `note` and `log_tail` in the status say what.
 
 ## Use the model

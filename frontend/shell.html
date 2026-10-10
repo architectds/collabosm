@@ -504,6 +504,7 @@ const I18N = {
     'speed.src.proxy': 'Last reply; only its first token is timed (this server does not report speed) · {ago} ago.',
     'speed.where': 'Measured for {recipe}, not in this session.',
     'speed.none': 'No speed measured for {recipe} yet.',
+    'speed.config_changed': 'Historical speeds: measured with a {measured}-token window. The current {configured}-token configuration has not been benchmarked.',
     'sec.conn': 'Connection', 'conn.sum': '{n} billing',
     'sec.tunnel': 'Tunnel', 'tunnel.none': 'No tunnel: nothing is running.',
     'tunnel.addr': 'Address', 'tunnel.state': 'Status', 'tunnel.checked': 'Last check',
@@ -757,6 +758,7 @@ const I18N = {
     'speed.src.proxy': '最近一次回复；只计了首字时间（这个服务端不上报速度）· {ago}前。',
     'speed.where': '{recipe} 的实测值，不是本次会话的数字。',
     'speed.none': '{recipe} 还没有实测速度。',
+    'speed.config_changed': '历史速度来自 {measured} token 上下文配置；当前 {configured} token 配置尚未测速。',
     'sec.conn': '连接', 'conn.sum': '{n} 个计费',
     'sec.tunnel': '隧道', 'tunnel.none': '没有隧道：当前没有运行中的机器。',
     'tunnel.addr': '地址', 'tunnel.state': '状态', 'tunnel.checked': '上次检查',
@@ -1009,6 +1011,7 @@ const I18N = {
     'speed.src.proxy': '直近の返信。初回トークンのみ計測（このサーバーは速度を報告しません）· {ago}前。',
     'speed.where': '{recipe} の実測値で、このセッションの数値ではありません。',
     'speed.none': '{recipe} の速度はまだ実測していません。',
+    'speed.config_changed': '速度は {measured} トークン設定での過去の実測値です。現在の {configured} トークン設定は未計測です。',
     'sec.conn': '接続', 'conn.sum': '課金中 {n}',
     'sec.tunnel': 'トンネル', 'tunnel.none': 'トンネルはありません：稼働中のマシンがありません。',
     'tunnel.addr': 'アドレス', 'tunnel.state': '状態', 'tunnel.checked': '最終確認',
@@ -1358,6 +1361,15 @@ function chosenRecipe(g) {
 
 function fact(r, k) { return ((r && r.facts) || {})[k] || null; }
 
+function benchmarkContextHTML(r) {
+  const measured = (fact(r, 'benchmark_context') || {}).v;
+  const configured = (fact(r, 'context') || {}).v;
+  if (!Number.isFinite(measured) || !Number.isFinite(configured) || measured === configured) return '';
+  return '<p class="fine">' + esc(t('speed.config_changed', {
+    measured: num(measured, 0), configured: num(configured, 0),
+  })) + '</p>';
+}
+
 function factValue(k, f) {
   const v = f.v;
   if (v === null || v === undefined) return '—';
@@ -1703,7 +1715,7 @@ function gpuHTML(g, locked) {
       + '</select>' + ico('chevron', 'r') + '</label>';
   }
   if (r) {
-    h += factsHTML(r);
+    h += factsHTML(r) + benchmarkContextHTML(r);
     if ((fact(r, 'responses_api') || {}).v === false) h += '<p class="fine">' + esc(t('confirm.chat_only')) + '</p>';
   }
   const can = !!r && r.runnable && !locked;
@@ -1744,6 +1756,7 @@ function speedHTML() {
   } else if (r) {
     const name = r.card + ' · ' + r.model;
     h += '<p class="fine">' + esc(t(pre === null || pre === undefined ? 'speed.none' : 'speed.where', { recipe: name })) + '</p>';
+    h += benchmarkContextHTML(r);
   }
   return h;
 }

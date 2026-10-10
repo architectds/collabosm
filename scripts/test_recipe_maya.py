@@ -32,7 +32,14 @@ class MayaRecipeTests(unittest.TestCase):
         evidence = recipe.facts(self.registry, RECIPE_ID)
         self.assertEqual(evidence["prefill_tps"]["v"], 1084.1)
         self.assertEqual(evidence["decode_tps"]["v"], 16.2)
-        self.assertEqual(evidence["context"]["v"], 32768)
+        self.assertEqual(model["native_ctx"], 1048576)
+        self.assertEqual(model["maya"]["context"], 131072)
+        self.assertEqual(evidence["context"]["v"], 131072)
+        self.assertFalse(evidence["context"]["measured"])
+        self.assertEqual(evidence["benchmark_context"]["v"], 32768)
+        self.assertIn("Historical 32K", evidence["prefill_tps"]["src"])
+        self.assertIn("not a measurement of 128K", evidence["vram_mib"]["src"])
+        self.assertEqual(evidence["expert_reserve_mib"]["v"], 2048)
         self.assertFalse(evidence["vision"]["v"])
 
     def test_launch_contract_is_selectable_but_unverified(self):
@@ -44,6 +51,8 @@ class MayaRecipeTests(unittest.TestCase):
         self.assertEqual(env["MAYA_MODEL"], "Maya-L")
         self.assertEqual(env["MAYA_MODEL_REVISION"], "f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da")
         self.assertEqual(env["MAYA_MIN_DISK_GIB"], "180")
+        self.assertEqual(env["MAYA_CONTEXT"], "131072")
+        self.assertEqual(env["MAYA_RESERVE_MB"], "2048")
         self.assertEqual(env["MAYA_VISION"], "0")
         self.assertNotIn("MAYA_PORT", env)  # the engine inherits common PORT
         proc = subprocess.run(
@@ -52,6 +61,33 @@ class MayaRecipeTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("ENGINE=maya", proc.stdout)
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "recipe.py"), "vmenv", RECIPE_ID],
+            text=True, capture_output=True, env={k: v for k, v in os.environ.items() if k != "FORCE_RECIPE"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("export MAYA_RESERVE_MB=2048", proc.stdout)
+
+    def test_context_is_independent_of_positive_native_cap_and_strictly_typed(self):
+        good = copy.deepcopy(self.registry)
+        model = next(m for m in good["models"] if m["id"] == "glm53-flash-maya-l")
+        model["native_ctx"] = 1048576
+        model["maya"]["context"] = 131072
+        self.assertFalse(any("native_ctx" in issue or "maya.context" in issue for issue in recipe.validate(good)))
+
+        for value in (True, 131072.0, "131072", 4095, 1048577):
+            with self.subTest(context=value):
+                bad = copy.deepcopy(good)
+                candidate = next(m for m in bad["models"] if m["id"] == "glm53-flash-maya-l")
+                candidate["maya"]["context"] = value
+                self.assertTrue(any("maya.context" in issue for issue in recipe.validate(bad)))
+
+        for value in (True, 1048576.0, "1048576", 0, -1):
+            with self.subTest(native_ctx=value):
+                bad = copy.deepcopy(good)
+                candidate = next(m for m in bad["models"] if m["id"] == "glm53-flash-maya-l")
+                candidate["native_ctx"] = value
+                self.assertTrue(any("native_ctx" in issue for issue in recipe.validate(bad)))
 
     def test_registry_requires_pinned_maya_and_hf_revisions(self):
         bad = copy.deepcopy(self.registry)

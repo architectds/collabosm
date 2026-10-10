@@ -275,6 +275,15 @@ terminated the session; the account reported no active sessions, zero assignment
 rate. Any collabosm Maya recipe remains **not end-to-end verified** until its own provisioning,
 proxy, stop and API surface are run on a separately authorized session.
 
+**Subsequent offline recipe change (2026-10-10):** the configured window is now 131,072 tokens
+(128K), with FP16 KV unchanged and `STRATA_GLM_RESERVE_MB=2048` in its persistent engine config.
+The larger state is allocated before the expert cache is sized, and the 2 GiB reserve replaces
+the default 700 MiB outside that pool. Thus the GPU expert cache gets less space; the model's
+experts and quantization are unchanged. The model's native context metadata is corrected to
+1,048,576, separate from the configured 128K window. **No GPU was started for this change.**
+All measurements above remain evidence for the previous 32K/default-reserve configuration,
+not measured throughput, memory use, or full-window validation of the new 128K recipe.
+
 ## What Colab charges, and what it counts as use (2026-09-25/26)
 
 | item | value | source |

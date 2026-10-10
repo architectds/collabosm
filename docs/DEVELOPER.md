@@ -98,7 +98,7 @@ pair that cannot fit is not.
 | recipe | card | model | status | notes |
 |---|---|---|---|---|
 | `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
-| `a100-80g-hm/glm53-flash-maya-l` | A100-80G High-RAM, 6.77 CU/h (measured) | GLM-5.3-Flash Maya-L, 156.3 GB GGUF, IQ3_S gate/up with IQ4_XS/Q5_K down | unmeasured launch path; direct VM model trial passed | Source-pinned Project Maya v1.0.30, model-revision-pinned 4-shard download, text-only 32K context. Direct zero-cache 11,515-token prefill 1,084.1 t/s and 256-token decode 16.2 t/s (one sample); setup 76.8 min, first load ~8 min. No `/v1/responses`; not a Codex Responses endpoint. Conservative first-run estimate 110 min; full collabosm provision/tunnel path not yet GPU-tested. |
+| `a100-80g-hm/glm53-flash-maya-l` | A100-80G High-RAM, 6.77 CU/h (measured) | GLM-5.3-Flash Maya-L, 156.3 GB GGUF, IQ3_S gate/up with IQ4_XS/Q5_K down | unmeasured 128K configuration; prior 32K VM model trial passed | Source-pinned Project Maya v1.0.30, model-revision-pinned 4-shard download, text-only 128K context, FP16 KV, 2,048 MiB non-expert reserve. Historical **32K configuration**: zero-cache 11,515-token prefill 1,084.1 t/s and 256-token decode 16.2 t/s (one sample); setup 76.8 min, first load ~8 min. No `/v1/responses`; not a Codex Responses endpoint. Conservative first-run estimate 110 min; 128K and full collabosm provision/tunnel path not yet GPU-tested. |
 | `a100-40g/qwen38-27b` (**default**) | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured (speeds measured with Q8 KV, `docs/MEASURED.md`) | two 409,600-token conversations decoding together (YaRN 1.5625, cache 819,200, `CONCURRENCY 2`), Q4 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~33 GiB of 39 estimated |
 | `a100-40g/qwen38-fn-strata` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-Flash-Next GGUF IQ3_S 3.50 bpw (ISTA-DASLab GSQ-RCO), 83.6 GB, on Strata | verified | Official Strata v0.1.41 source build; A100-SXM4-40GB trial used CUDA 13.0.88, 262,144 context, int8 KV, GPU vision, MTP spec 4. Tested prefill samples 1,321-2,567 t/s (12.9K-110.9K input); decode 87.6-93.0 t/s in two 512-token probes. Historical v0.1.24 decode reference is +41-49% lower, but not same-box/text/context A/B; no general prefill improvement established. Chat, vision, tools, and stateless full-history Responses smoke checks passed; concurrency and full context limit not stress-tested. Conservative ready estimate 40 min; trial was ~29 min from assignment. |
 
@@ -181,7 +181,15 @@ undersized card. The adapter checks out exact Project Maya v1.0.30 commit
 `main`, so the adapter validates and replaces only that entry with pinned revision
 `f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da`; upstream per-shard SHA-256 checks stay active.
 The adapter makes a project-private Python environment, then runs the upstream text-only Maya-L
-setup at 32K context and starts its selected config explicitly. It supplies the collabosm API key
+setup at 131,072 context and starts its selected config explicitly. Model `native_ctx` is 1,048,576;
+the configured window is independent and must not exceed that limit. KV remains FP16: no
+`--kv-resident` is added, because the pinned GLM path bypasses QSA's streaming implementation.
+`MAYA_RESERVE_MB=2048` is passed as `--env STRATA_GLM_RESERVE_MB=2048` into the persistent Maya
+config. The engine allocates its larger KV/state before automatically budgeting the expert pool,
+then leaves this 2 GiB reserve outside the pool instead of its default 700 MiB. This shrinks only
+the GPU expert cache; it does not prune model experts, lower quantization, or guarantee a fixed
+pool size. The new configuration is offline-tested only; historical throughput and VRAM facts are
+from the original 32K/default-reserve trial. It supplies the collabosm API key
 by environment rather than argv. The model server's `/health` and keyed `/v1/models` are the
 coupling probes; its `/v1/status` supplies telemetry. The upstream server has **no**
 `/v1/responses`, and this recipe does not claim vision or Codex Responses support. The direct

@@ -114,8 +114,17 @@ def validate(reg: dict) -> list:
                 out.append("model %s: maya.model_dir must match dir" % m.get("id"))
             if not re.fullmatch(r"[0-9a-f]{40}", str(m.get("revision", ""))):
                 out.append("model %s: Maya model revision must be a pinned 40-character commit" % m.get("id"))
-            if maya.get("context") != m.get("native_ctx") or not isinstance(maya.get("context"), int):
-                out.append("model %s: maya.context must match native_ctx" % m.get("id"))
+            native_ctx = m.get("native_ctx")
+            if isinstance(native_ctx, bool) or not isinstance(native_ctx, int) or native_ctx <= 0:
+                out.append("model %s: native_ctx must be a positive integer" % m.get("id"))
+            context = maya.get("context")
+            if (isinstance(context, bool) or not isinstance(context, int) or context < 4096
+                    or isinstance(native_ctx, bool) or not isinstance(native_ctx, int)
+                    or native_ctx <= 0 or context > native_ctx):
+                out.append("model %s: maya.context must be an integer from 4096 through native_ctx" % m.get("id"))
+            reserve_mb = maya.get("reserve_mb")
+            if isinstance(reserve_mb, bool) or not isinstance(reserve_mb, int) or reserve_mb <= 0:
+                out.append("model %s: maya.reserve_mb must be a positive integer" % m.get("id"))
             for key in ("min_disk_gib", "min_vram_gib"):
                 if not isinstance(maya.get(key), int) or maya[key] <= 0:
                     out.append("model %s: maya.%s must be a positive integer" % (m.get("id"), key))
@@ -195,6 +204,7 @@ def launch_env(reg: dict, rid: str) -> dict:
             "MAYA_GPU": maya["gpu"], "MAYA_DATA_DIR": maya["data_dir"],
             "MAYA_MODEL_DIR": maya["model_dir"], "MAYA_MIN_DISK_GIB": maya["min_disk_gib"],
             "MAYA_MIN_VRAM_GIB": maya["min_vram_gib"],
+            "MAYA_RESERVE_MB": maya["reserve_mb"],
             "MAYA_VISION": 1 if maya["vision"] else 0,
         })
     env.update(r.get("env") or {})

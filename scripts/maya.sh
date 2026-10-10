@@ -9,7 +9,8 @@ MAYA_COMMIT=${MAYA_COMMIT:-c189f7ac8114ca039e9643314d1fead014fc6ff5}
 MAYA_MODEL=${MAYA_MODEL:-Maya-L}
 MAYA_MODEL_REPO=${MAYA_MODEL_REPO:-peasantsmith/GLM-5.3-Flash-Maya-GGUF}
 MAYA_MODEL_REVISION=${MAYA_MODEL_REVISION:-f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da}
-MAYA_CONTEXT=${MAYA_CONTEXT:-32768}
+MAYA_CONTEXT=${MAYA_CONTEXT:-131072}
+MAYA_RESERVE_MB=${MAYA_RESERVE_MB:-2048}
 MAYA_GPU=${MAYA_GPU:-0}
 MAYA_MIN_DISK_GIB=${MAYA_MIN_DISK_GIB:-180}
 MAYA_MIN_VRAM_GIB=${MAYA_MIN_VRAM_GIB:-70}
@@ -19,7 +20,8 @@ MAYA_CONFIG=$MAYA_DIR/maya-maya-l.json
 maya_fail() { say "!! Maya: $*"; return 1; }
 maya_preflight() {
   local free mib total name started_shards
-  [[ "$MAYA_GPU" =~ ^[0-9]+$ && "$MAYA_MIN_DISK_GIB" =~ ^[0-9]+$ && "$MAYA_MIN_VRAM_GIB" =~ ^[0-9]+$ ]] || { maya_fail "GPU and minimum resource settings must be non-negative integers"; return 1; }
+  [[ "$MAYA_GPU" =~ ^[0-9]+$ && "$MAYA_MIN_DISK_GIB" =~ ^[0-9]+$ && "$MAYA_MIN_VRAM_GIB" =~ ^[0-9]+$ && "$MAYA_CONTEXT" =~ ^[0-9]+$ && "$MAYA_RESERVE_MB" =~ ^[0-9]+$ ]] || { maya_fail "GPU, context, reserve, and minimum resource settings must be non-negative integers"; return 1; }
+  (( MAYA_CONTEXT >= 4096 && MAYA_CONTEXT <= 1048576 && MAYA_RESERVE_MB > 0 )) || { maya_fail "context must be 4096..1048576 and expert reserve must be positive"; return 1; }
   [[ "$(uname -s)" == Linux ]] || { maya_fail "Project Maya requires Linux"; return 1; }
   command -v git >/dev/null && command -v nvidia-smi >/dev/null || { maya_fail "git and nvidia-smi are required"; return 1; }
   free=$(df -Pk "$MAYA_DATA_DIR" 2>/dev/null | awk 'NR==2 {print int($4/1048576)}')
@@ -75,10 +77,10 @@ PY
   fi
   export MAYA_UPDATE_CHECK=0 MAYA_RESTART_ON_UPDATE=0
   status "stage=weights"
-  ( cd "$MAYA_DIR" && "$MAYA_PY" maya.py --setup --model "$MAYA_MODEL" --gpu "$MAYA_GPU" --context "$MAYA_CONTEXT" --models-dir "$MAYA_MODEL_DIR" --download-model --no-vision --yes --no-start --port "$PORT" ) || { maya_fail "setup or model download failed"; return 1; }
-  python3 - "$MAYA_CONFIG" "$MAYA_MODEL_DIR" "$MAYA_GPU" "$MAYA_CONTEXT" <<'PY' || { maya_fail "Maya config does not match the selected text-only recipe"; return 1; }
+  ( cd "$MAYA_DIR" && "$MAYA_PY" maya.py --setup --model "$MAYA_MODEL" --gpu "$MAYA_GPU" --context "$MAYA_CONTEXT" --models-dir "$MAYA_MODEL_DIR" --env "STRATA_GLM_RESERVE_MB=$MAYA_RESERVE_MB" --download-model --no-vision --yes --no-start --port "$PORT" ) || { maya_fail "setup or model download failed"; return 1; }
+  python3 - "$MAYA_CONFIG" "$MAYA_MODEL_DIR" "$MAYA_GPU" "$MAYA_CONTEXT" "$MAYA_RESERVE_MB" <<'PY' || { maya_fail "Maya config does not match the selected text-only recipe"; return 1; }
 import json, pathlib, sys
-p = pathlib.Path(sys.argv[1]); model_dir = pathlib.Path(sys.argv[2]); gpu = int(sys.argv[3]); ctx = str(sys.argv[4])
+p = pathlib.Path(sys.argv[1]); model_dir = pathlib.Path(sys.argv[2]); gpu = int(sys.argv[3]); ctx = str(sys.argv[4]); reserve = str(sys.argv[5])
 cfg = json.loads(p.read_text())
 args = cfg.get('args') or []
 def arg(name):
@@ -87,6 +89,7 @@ assert cfg.get('model_name') == 'glm-5.3-flash'
 assert (cfg.get('installer') or {}).get('quant') == 'Maya-L'
 assert cfg.get('gpu') == [gpu]
 assert arg('--max-context') == ctx
+assert str(cfg.get('env', {}).get('STRATA_GLM_RESERVE_MB')) == reserve
 assert pathlib.Path(arg('--glm-pack')).is_relative_to(model_dir / 'Maya-L')
 assert not cfg.get('vision')
 assert cfg.get('host', '127.0.0.1') in ('127.0.0.1', 'localhost')
