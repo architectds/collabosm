@@ -685,6 +685,7 @@ class Control:
                         "cu_need": round(need, 1)}
             warn = {"recipe": recipe["id"], "card": recipe["card"], "model": recipe["model"],
                     "status": recipe["status"],
+                    "chat_only": (recipe["facts"].get("responses_api") or {}).get("v") is False,
                     "rate_measured": bool((recipe["facts"].get("cu_per_hour") or {}).get("measured")),
                     "cu_per_hour": recipe["cu_per_hour"],
                     "usd_per_hour": round(recipe["cu_per_hour"] * 0.0999, 2),

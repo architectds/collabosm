@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-09-27",
+  "updated": "2026-10-10",
   "about": "Which GPU runs which model, and how. scripts/recipe.py turns a recipe id into the environment scripts/up.sh launches with; the frontend lists what is here. Every number carries {v, measured, src}: measured means read on that card, anything else is an estimate and says so.",
   "gpus": [
     {
@@ -28,9 +28,9 @@
       "min_vram_gib": 70,
       "cu_per_hour": 6.77,
       "facts": {
-        "cu_per_hour": {"v": 6.77, "measured": true, "src": "Colab /tun/m/ccu-info consumptionRateHourly with this box as the account's only assignment, 2026-09-25 (older docs quote 7.52)"},
+        "cu_per_hour": {"v": 6.77, "measured": true, "src": "Colab /tun/m/ccu-info consumptionRateHourly with this box as the account's only assignment, 2026-10-10"},
         "vram": {"v": 79.3, "unit": "GiB", "measured": true, "src": "restore.py probe, docs/MEASURED.md"},
-        "ram": {"v": 167.1, "unit": "GiB", "measured": true, "src": "restore.py probe, docs/MEASURED.md"}
+        "ram": {"v": 167.1, "unit": "GiB", "measured": true, "src": "A100-SXM4-80GB High-RAM assignment probe, 2026-10-10"}
       }
     }
   ],
@@ -96,6 +96,36 @@
         "cuda": "auto",
         "quant": "IQ3_S",
         "dir": "/content/strata-v0.1.41"
+      }
+    },
+    {
+      "id": "glm53-flash-maya-l",
+      "name": "GLM-5.3-Flash",
+      "short": "Maya-L GGUF",
+      "params": "321B MoE",
+      "quant": "Maya-L routed GGUF; IQ3_S gate/up, IQ4_XS down, Q5_K sensitive, Q6 attention",
+      "engine": "maya",
+      "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF",
+      "branch": "Maya-L",
+      "revision": "f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da",
+      "dir": "/content/Maya-data/models",
+      "served_id": "glm-5.3-flash",
+      "native_ctx": 32768,
+      "vision": false,
+      "mtp": false,
+      "ngram": false,
+      "recurrent": false,
+      "maya": {
+        "repo": "https://github.com/mw00/project-maya.git",
+        "commit": "c189f7ac8114ca039e9643314d1fead014fc6ff5",
+        "model": "Maya-L",
+        "data_dir": "/content/Maya-data",
+        "model_dir": "/content/Maya-data/models",
+        "min_disk_gib": 180,
+        "min_vram_gib": 70,
+        "gpu": 0,
+        "vision": false,
+        "context": 32768
       }
     }
   ],
@@ -235,6 +265,31 @@
           "measured": true,
           "src": "v0.1.41 extra-smoke-v2 validated a function tool probe and full function-call roundtrip (report_answer returned exact text 42)."
         }
+      }
+    },
+    {
+      "id": "a100-80g-hm/glm53-flash-maya-l",
+      "gpu": "a100-80g-hm",
+      "model": "glm53-flash-maya-l",
+      "status": "unmeasured",
+      "eta_min": 110,
+      "env": {},
+      "why": {
+        "en": "Pinned Project Maya and Maya-L were measured directly; the CollabOSM launch/tunnel path is built but has not had a paid end-to-end run. Chat-only, text-only; no Responses API.",
+        "zh": "固定版本 Project Maya 与 Maya-L 已直接实测；CollabOSM 启动和隧道流程已接入，但尚未付费端到端复测。仅支持文本聊天，不支持 Responses API。"
+      },
+      "facts": {
+        "weights": {"v": 145.6, "unit": "GiB", "measured": true, "src": "Four Maya-L GGUF shards totalled 156.319 GB decimal (145.6 GiB); HF main resolved to revision f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da before the 2026-10-10 trial download, whose files passed upstream SHA-256 checks."},
+        "engine_version": {"v": "1.0.30", "measured": true, "src": "Project Maya release v1.0.30, source commit c189f7ac8114ca039e9643314d1fead014fc6ff5; trial on 2026-10-10."},
+        "prefill_tps": {"v": 1084.1, "unit": "tokens/s", "measured": true, "src": "A100-SXM4-80GB High-RAM, one 11,515-token text prompt; prompt cache was zero. Observed sample, not a median."},
+        "decode_tps": {"v": 16.2, "unit": "tokens/s", "measured": true, "src": "A100-SXM4-80GB High-RAM, 256-token text generation; observed sample, not a median."},
+        "vram_mib": {"v": 81169, "measured": true, "src": "nvidia-smi point-in-time reading immediately after the 11,515-in/256-out text sample on A100-SXM4-80GB; 81,920 MiB total, 2026-10-10."},
+        "eta_min": {"v": 110, "unit": "min", "measured": false, "src": "Conservative UI estimate for first setup through first model load. Trial took 76.8 min for setup/download/build plus about 8 min for initial load (~85 min total); Colab scheduling and transfer/build vary."},
+        "context": {"v": 32768, "measured": true, "src": "Maya-L configured at 32,768 tokens in the 2026-10-10 trial; larger contexts not tested."},
+        "vision": {"v": false, "measured": true, "src": "Trial used text-only mode (`--no-vision`); image inputs are unsupported by this recipe."},
+        "responses_api": {"v": false, "measured": true, "src": "Pinned Project Maya v1.0.30 `serve/server.py` route inspection: chat completions are exposed; no `/v1/responses` route is implemented."},
+        "quantization": {"v": "IQ3_S gate/up; IQ4_XS down; Q5_K sensitive tensors; Q6 attention", "measured": true, "src": "Four-shard Maya-L quant layout used in the 2026-10-10 trial; Maya-S and Maya-M are not substitutes for this measured profile."},
+        "host_ram": {"v": 167.1, "unit": "GiB", "measured": true, "src": "A100-SXM4-80GB High-RAM assignment probe, 2026-10-10."}
       }
     }
   ]

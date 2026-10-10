@@ -10,7 +10,8 @@ Every number carries its evidence: `facts[<name>] = {"v": ..., "measured": bool,
 "src": "..."}`, and a recipe's `status` says how far it has been taken:
 
     verified     run end to end on that card; its numbers are measured
-    unmeasured   runnable -- the launch path exists -- but its numbers are estimates
+    unmeasured   runnable launch path exists, but the full recipe is not end-to-end verified;
+                 individual model-only facts may still be measured
     placeholder  listed so the choice is visible; refused until it is written
 
     python3 scripts/recipe.py list
@@ -36,8 +37,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = os.environ.get("RECIPES_FILE") or os.path.join(HERE, os.pardir, "recipes.json")
 STATUSES = ("verified", "unmeasured", "placeholder")
-# what serves the model on the box: our api_server.py on ExLlamaV3, or Strata's own server
-ENGINES = ("exl3", "strata")
+# what serves the model on the box: our ExLlamaV3 API, Strata, or Project Maya
+ENGINES = ("exl3", "strata", "maya")
 DEFAULT = "a100-40g/qwen38-27b"
 ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # What the VM keeps besides the recipe's own keys, when the caller sets them: they are
@@ -97,6 +98,31 @@ def validate(reg: dict) -> list:
             for k, pat in required:
                 if not re.match(pat, str(s.get(k, ""))):
                     out.append("model %s: strata.%s missing or malformed" % (m.get("id"), k))
+        if m.get("engine") == "maya":
+            maya = m.get("maya") or {}
+            required = {
+                "repo": r"https://github\.com/[\w.-]+/[\w.-]+\.git$",
+                "commit": r"[0-9a-f]{40}$",
+                "model": r"Maya-(?:S|M|L)$",
+                "data_dir": r"/[^\s]+$",
+                "model_dir": r"/[^\s]+$",
+            }
+            for key, pattern in required.items():
+                if not re.fullmatch(pattern, str(maya.get(key, ""))):
+                    out.append("model %s: maya.%s missing or malformed" % (m.get("id"), key))
+            if maya.get("model_dir") != m.get("dir"):
+                out.append("model %s: maya.model_dir must match dir" % m.get("id"))
+            if not re.fullmatch(r"[0-9a-f]{40}", str(m.get("revision", ""))):
+                out.append("model %s: Maya model revision must be a pinned 40-character commit" % m.get("id"))
+            if maya.get("context") != m.get("native_ctx") or not isinstance(maya.get("context"), int):
+                out.append("model %s: maya.context must match native_ctx" % m.get("id"))
+            for key in ("min_disk_gib", "min_vram_gib"):
+                if not isinstance(maya.get(key), int) or maya[key] <= 0:
+                    out.append("model %s: maya.%s must be a positive integer" % (m.get("id"), key))
+            if not isinstance(maya.get("gpu"), int) or maya["gpu"] < 0:
+                out.append("model %s: maya.gpu must be a non-negative integer index" % m.get("id"))
+            if not isinstance(maya.get("vision"), bool) or maya.get("vision") is not False or m.get("vision") is not False:
+                out.append("model %s: Maya currently requires text-only vision=false" % m.get("id"))
         # bootstrap.sh keeps one pack per directory (its .collabosm-revision marker)
         if m.get("dir") in dirs:
             out.append("models %s and %s share %s" % (dirs[m["dir"]], m.get("id"), m["dir"]))
@@ -160,6 +186,17 @@ def launch_env(reg: dict, rid: str) -> dict:
                     "STRATA_DIR": s.get("dir", "/content/strata"),
                     # the image encoder on the card (a recipe's env can say cpu)
                     "STRATA_VISION": "gpu" if m.get("vision") else "none"})
+    elif m.get("engine") == "maya":
+        maya = m["maya"]
+        env.update({
+            "MAYA_REPO": maya["repo"], "MAYA_COMMIT": maya["commit"],
+            "MAYA_MODEL": maya["model"], "MAYA_MODEL_REPO": m["repo"],
+            "MAYA_MODEL_REVISION": m["revision"], "MAYA_CONTEXT": maya["context"],
+            "MAYA_GPU": maya["gpu"], "MAYA_DATA_DIR": maya["data_dir"],
+            "MAYA_MODEL_DIR": maya["model_dir"], "MAYA_MIN_DISK_GIB": maya["min_disk_gib"],
+            "MAYA_MIN_VRAM_GIB": maya["min_vram_gib"],
+            "MAYA_VISION": 1 if maya["vision"] else 0,
+        })
     env.update(r.get("env") or {})
     return {k: _scalar(v) for k, v in env.items()}
 

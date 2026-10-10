@@ -51,7 +51,7 @@ import recipe as registry  # noqa: E402
 # what serve.sh launches on the VM, and what it reads its state with; api_server.py
 # above all -- the kit once shipped without it, and a fresh clone waited 50 paid
 # minutes for a /health that nothing could answer
-KIT = ("api_server.py", "bootstrap.sh", "serve.sh", "strata.sh", "status.py", "probe_gpu.py")
+KIT = ("api_server.py", "bootstrap.sh", "serve.sh", "strata.sh", "maya.sh", "status.py", "probe_gpu.py")
 
 # Runs on the VM. A re-attached box still has the last run's STATUS and endpoint.json:
 # they go first, so nothing can take the old service for the new one. serve.sh is
@@ -189,7 +189,7 @@ def cmd_up(a) -> int:
     try:
         # Source builds are slower than the verified prebuilt engine; leave enough
         # room for compilation without changing the timeout on unrelated recipes.
-        wait_min = float(E.get("WAIT_MIN") or (75 if E.get("STRATA_BUILD") == "1" else 50))
+        wait_min = float(E.get("WAIT_MIN") or (120 if E.get("ENGINE") == "maya" else (75 if E.get("STRATA_BUILD") == "1" else 50)))
     except ValueError:
         say("!! WAIT_MIN must be a number")
         return 2

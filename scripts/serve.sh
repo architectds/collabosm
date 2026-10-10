@@ -29,6 +29,7 @@ import pathlib, secrets
 pathlib.Path("/content/api-key.txt").write_text("sk-collabosm-" + secrets.token_hex(10))
 PY
 KEY=$(cat "$KEY_FILE")
+chmod 600 "$KEY_FILE"
 
 # stop any previous instance (this script is safe to re-run)
 # Older serve.sh processes must go too: otherwise a superseded instance watches its
@@ -42,7 +43,12 @@ pkill -f 'cloudflare[d]' 2>/dev/null || true
 sleep 2
 
 status "stage=loading"
-if [ "${ENGINE:-exl3}" = "strata" ]; then
+if [ "${ENGINE:-exl3}" = "maya" ]; then
+  . /content/maya.sh
+  say "starting Maya for ${RECIPE:-no recipe} (${MAYA_MODEL:-Maya-L}, context ${MAYA_CONTEXT:-32768})"
+  maya_start || { status "stage=serve_failed"; exit 1; }
+  PROC="$MAYA_PROC"
+elif [ "${ENGINE:-exl3}" = "strata" ]; then
   # Strata's own server (strata.sh): same port, same key, same tunnel below
   . /content/strata.sh
   say "starting Strata for ${RECIPE:-no recipe} (${MODEL_ID:-?}: ${STRATA_MODEL:-?}, context ${STRATA_CONTEXT:-262144}, kv ${STRATA_KV:-int8})"
@@ -54,7 +60,9 @@ else
   PROC='/content/api_server.py'
 fi
 
-for _ in $(seq 1 120); do
+polls=120
+[[ "${ENGINE:-exl3}" == "maya" ]] && polls=180  # first Maya-L expert-tier warm-up took ~8 min once
+for _ in $(seq 1 "$polls"); do
   code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "http://127.0.0.1:$PORT/health" || true)
   [[ "$code" == "200" ]] && break
   if ! pgrep -f "$PROC" >/dev/null; then

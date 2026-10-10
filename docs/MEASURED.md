@@ -241,6 +241,40 @@ streaming. Responses was tested as a stateless full-history API; response-ID ret
 compact, a full Codex `apply_patch` workflow, full-window context load, and concurrency were **not**
 tested. The paid GPU was stopped; Colab reported zero assignments and zero hourly rate afterward.
 
+## Project Maya v1.0.30 Maya-L on A100-80G High-RAM (2026-10-10)
+
+One direct, text-only VM trial used a verified NVIDIA A100-SXM4-80GB (81,920 MiB VRAM),
+167.1 GiB host RAM, Colab `shape=hm` and 6.77 CU/h. The official
+[`mw00/project-maya` v1.0.30](https://github.com/mw00/project-maya/releases/tag/v1.0.30)
+source was pinned to `c189f7ac8114ca039e9643314d1fead014fc6ff5`. Before download,
+[`peasantsmith/GLM-5.3-Flash-Maya-GGUF`](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF)
+`main` resolved to `f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da`; upstream's installer used
+`main` URLs but verified the four published per-shard SHA-256 hashes. The new collabosm adapter
+pins the URL revision as well. The four GGUF shards totalled 156.319 GB. The routed experts use
+IQ3_S gate/up and IQ4_XS down, with Q5_K for
+sensitive tensors and Q6_K attention: **Maya-S and Maya-M were not selected**, because their
+2-bit components do not meet the requested 3-bit floor. Setup used `--no-vision` and 32,768
+context; this trial makes no vision claim.
+
+The pinned source build, download and pack setup returned exit 0 in **76.8 minutes**. The first
+load warmed expert tiers for roughly another **8 minutes**. Colab Python 3.13 lacked `ensurepip`,
+so the project-private venv required `--without-pip` and a pinned pip bootstrap. Port 8080 was
+occupied by another VM process, so the Maya server bound to loopback port 18080. The API returned
+an actual text completion and `/v1/status` engine timings:
+
+| Actual input | Output | Cached prompt | Prefill | Decode | GPU memory used |
+|---:|---:|---:|---:|---:|---:|
+| 11,515 tokens | 256 tokens | 0 | **1,084.1 tok/s** | **16.2 tok/s** | 81,169 / 81,920 MiB |
+
+Engine time was 10,621.7 ms prefill and 15,781.5 ms decode; 26.42 s wall time. This is **one
+sample**, not a median or a model-quality assessment. The completion ended at the requested
+256-token length. The model was accessed directly on the VM, not through a collabosm recipe,
+tunnel, or Codex. Maya v1.0.30's server source exposes Chat Completions but has no
+`/v1/responses` route; do not infer that Codex Responses works. After the trial, `colab stop`
+terminated the session; the account reported no active sessions, zero assignments and zero hourly
+rate. Any collabosm Maya recipe remains **not end-to-end verified** until its own provisioning,
+proxy, stop and API surface are run on a separately authorized session.
+
 ## What Colab charges, and what it counts as use (2026-09-25/26)
 
 | item | value | source |

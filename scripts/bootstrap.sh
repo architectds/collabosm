@@ -58,7 +58,10 @@ nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader | s
 # ------------------------------------------------------ a Strata recipe instead
 # Strata brings its own engine and server (strata.sh): the ExLlamaV3 runtime and the
 # EXL3 weights below are not for it. The env block at the end is shared.
-if [ "${ENGINE:-exl3}" = "strata" ]; then
+if [ "${ENGINE:-exl3}" = "maya" ]; then
+  . /content/maya.sh
+  maya_install || fail "Maya install (see the lines above)"
+elif [ "${ENGINE:-exl3}" = "strata" ]; then
   . /content/strata.sh
   strata_install || fail "Strata install (see the lines above)"
 else
@@ -128,7 +131,9 @@ fi   # ExLlamaV3 / Strata
 # settings as up.sh resolved them, overrides included.
 status "stage=env"
 fixed="RECIPE MODEL_ID MODEL_DIR MODEL_REPO MODEL_REVISION CACHE_SIZE CACHE_QUANT CPU_CACHE_GB
-       RECURRENT_CACHE_GB NDT GCS PORT VISION YARN_FACTOR CONCURRENCY MTP NGRAM"
+       RECURRENT_CACHE_GB NDT GCS PORT VISION YARN_FACTOR CONCURRENCY MTP NGRAM
+       MAYA_DIR MAYA_DATA_DIR MAYA_MODEL_DIR MAYA_REPO MAYA_COMMIT MAYA_MODEL MAYA_MODEL_REPO
+       MAYA_MODEL_REVISION MAYA_CONTEXT MAYA_GPU MAYA_MIN_DISK_GIB MAYA_MIN_VRAM_GIB MAYA_ENGINE"
 {
   for k in $fixed; do printf '%s=%q\n' "$k" "${!k-}"; done
   # and whatever else the recipe carries (EXL3_VISION_PINNED, ...), as up.sh wrote it

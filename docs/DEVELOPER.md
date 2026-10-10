@@ -90,12 +90,15 @@ it loads (`serve.sh` -> `api_server.py`). The frontend lists the same entries an
 so the rail and a hand-run `up` cannot disagree. A new pairing is a new entry, not a new script.
 
 Every number carries its evidence, `{v, measured, src}`, and a recipe's `status` says how far it has
-been taken: `verified` (run on that card, numbers measured) or `unmeasured` (the launch path exists,
-the numbers are estimates). Only recipes expected to run are listed; a pair that cannot fit is not.
+been taken: `verified` (the recipe run end to end on that card) or `unmeasured` (a launch path exists,
+but its full recipe run is not verified). An `unmeasured` recipe can still have measured **model-only**
+facts; read each fact's `measured` and `src` separately. Only recipes expected to run are listed; a
+pair that cannot fit is not.
 
 | recipe | card | model | status | notes |
 |---|---|---|---|---|
 | `a100-80g/qwen38-fn` | A100-80G High-RAM, 6.77 CU/h (measured) | Qwen3.8-Flash-Next 4.05 bpw | verified | 500K cache, YaRN x2, vision, n-gram table in host RAM |
+| `a100-80g-hm/glm53-flash-maya-l` | A100-80G High-RAM, 6.77 CU/h (measured) | GLM-5.3-Flash Maya-L, 156.3 GB GGUF, IQ3_S gate/up with IQ4_XS/Q5_K down | unmeasured launch path; direct VM model trial passed | Source-pinned Project Maya v1.0.30, model-revision-pinned 4-shard download, text-only 32K context. Direct zero-cache 11,515-token prefill 1,084.1 t/s and 256-token decode 16.2 t/s (one sample); setup 76.8 min, first load ~8 min. No `/v1/responses`; not a Codex Responses endpoint. Conservative first-run estimate 110 min; full collabosm provision/tunnel path not yet GPU-tested. |
 | `a100-40g/qwen38-27b` (**default**) | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-27B 4.00 bpw self-calibrated (head 5, vision 6 bits), 16.4 GB | unmeasured (speeds measured with Q8 KV, `docs/MEASURED.md`) | two 409,600-token conversations decoding together (YaRN 1.5625, cache 819,200, `CONCURRENCY 2`), Q4 KV, gcs 8192, MTP ndt 4, vision, no n-gram table; ~33 GiB of 39 estimated |
 | `a100-40g/qwen38-fn-strata` | A100-40G, 5.37 CU/h (Colab's figure) | Qwen3.8-Flash-Next GGUF IQ3_S 3.50 bpw (ISTA-DASLab GSQ-RCO), 83.6 GB, on Strata | verified | Official Strata v0.1.41 source build; A100-SXM4-40GB trial used CUDA 13.0.88, 262,144 context, int8 KV, GPU vision, MTP spec 4. Tested prefill samples 1,321-2,567 t/s (12.9K-110.9K input); decode 87.6-93.0 t/s in two 512-token probes. Historical v0.1.24 decode reference is +41-49% lower, but not same-box/text/context A/B; no general prefill improvement established. Chat, vision, tools, and stateless full-history Responses smoke checks passed; concurrency and full context limit not stress-tested. Conservative ready estimate 40 min; trial was ~29 min from assignment. |
 
@@ -167,12 +170,32 @@ by bootstrap.sh and serve.sh):
   limit. YaRN is not enabled in this recipe. Strata's own `GET /metrics` has more than
   `/v1/status`: the expert hit rate and a minute of hardware history.
 
+### Project Maya recipe (experimental)
+
+`a100-80g-hm/glm53-flash-maya-l` is a separate `engine: maya` path, not an ExLlama pack or the
+Qwen Strata recipe. `scripts/maya.sh` is shipped in the provisioning kit and sourced by
+`bootstrap.sh` and `serve.sh`. It checks for at least 180 GiB free model-disk space and 70 GiB
+VRAM **before** cloning or downloading; `restore.py` also requests `shape=hm` and rejects an
+undersized card. The adapter checks out exact Project Maya v1.0.30 commit
+`c189f7ac8114ca039e9643314d1fead014fc6ff5`. That release's Maya-L catalog points to HF
+`main`, so the adapter validates and replaces only that entry with pinned revision
+`f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da`; upstream per-shard SHA-256 checks stay active.
+The adapter makes a project-private Python environment, then runs the upstream text-only Maya-L
+setup at 32K context and starts its selected config explicitly. It supplies the collabosm API key
+by environment rather than argv. The model server's `/health` and keyed `/v1/models` are the
+coupling probes; its `/v1/status` supplies telemetry. The upstream server has **no**
+`/v1/responses`, and this recipe does not claim vision or Codex Responses support. The direct
+GPU/model trial passed; the entire collabosm provisioning, tunnel and stop path has only offline
+tests so far, hence `unmeasured`, not `verified`. A future paid end-to-end run needs a separately
+authorized GPU start.
+
 ## What is in here
 
 | path | role |
 |---|---|
 | `recipes.json` | **the recipe registry**: cards, models, and the launch settings for each pair, every number marked measured or not |
 | `scripts/recipe.py` | resolves a recipe id into the environment `up` launches with (`list`, `show`, `env`, `vmenv`, `check`) |
+| `scripts/maya.sh` | VM-only pinned Project Maya source/model setup, resource preflight, text-only config check and keyed server launch for the A100-80G Maya-L recipe |
 | `scripts/restore.py` | **the session restore script.** Re-attaches an orphaned VM from server truth, or creates one and actually requests the recipe's shape. Refuses/stops a box below the recipe's VRAM before spending anything. |
 | `scripts/colab_keepalive.py` | tells Colab the box is in use (the frontend calls it only while it is): the keep-alive ping, and with `--heartbeat` scripts/heartbeat.py on the kernel -- kernel use is what holds a box; the ping alone did not. Also refreshes the CLI's session record from the live assignment, and re-registers it when the CLI drops it |
 | `scripts/heartbeat.py` | runs on the VM, in the kernel, every 10 min while the box is in use and once on the tunnel's first miss: one JSON line of GPU/RAM/disk, the model server (process, /health, activity) and the tunnel (cloudflared running, the public address from the box itself), appended to /content/heartbeat.jsonl and kept on the laptop in ~/.collabosm/heartbeat.jsonl |

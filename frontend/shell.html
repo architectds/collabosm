@@ -481,13 +481,14 @@ const I18N = {
     'confirm.stops': 'Stops by itself after {idle} min idle, and after {max} h in any case.',
     'confirm.budget': 'Budget {budget} CU this month: {left} left now, about {after} after this start.',
     'confirm.balance': 'Balance {left} CU now; about {after} after this start.',
-    'confirm.unmeasured': 'This recipe has not been run on its card yet: its time, cost and speed are estimates.',
+    'confirm.unmeasured': 'This complete launch path has not been verified end to end. Treat any estimates separately from measured model-only results.',
+    'confirm.chat_only': 'Chat Completions only: this model server does not provide /v1/responses (Codex Responses is unsupported).',
     'confirm.rate': 'This card’s CU rate is Colab’s published figure, not one read from the account.',
     'sec.gpus': 'GPUs', 'gpus.sum': '{n} cards · {r} recipes', 'gpus.running': 'running: {card}',
     'tip.rate': 'CU per hour — {how}', 'tip.gvram': 'GPU memory', 'tip.gram': 'Host RAM',
     'how.measured': 'measured', 'how.estimate': 'an estimate',
     'model.label': 'Model',
-    'status.verified': 'verified', 'status.unmeasured': 'not yet run', 'status.placeholder': 'not runnable',
+    'status.verified': 'verified', 'status.unmeasured': 'not end-to-end verified', 'status.placeholder': 'not runnable',
     'fact.prefill_tps': 'Prefill', 'fact.decode_tps': 'Decode', 'fact.context': 'Context',
     'fact.vision': 'Vision', 'fact.concurrency': 'Parallel', 'fact.vram_mib': 'VRAM',
     'fact.weights': 'Weights', 'fact.load_s': 'Load', 'fact.eta_min': 'Ready in',
@@ -733,13 +734,14 @@ const I18N = {
     'confirm.stops': '空闲 {idle} 分钟自动停机，连续最长 {max} 小时。',
     'confirm.budget': '本月预算 {budget} CU，现在剩 {left}；启动后预计剩 {after}。',
     'confirm.balance': '现在余额 {left} CU；启动后预计剩 {after}。',
-    'confirm.unmeasured': '这个配方还没在它的卡上跑过：时间、花费和速度都是估算。',
+    'confirm.unmeasured': '完整启动流程尚未端到端验证。请区分估算数据与仅对模型本身的实测结果。',
+    'confirm.chat_only': '仅支持 Chat Completions：此模型服务没有 /v1/responses（不支持 Codex Responses）。',
     'confirm.rate': '这张卡的 CU 费率是 Colab 公布的数字，不是从账户读出来的。',
     'sec.gpus': '可用 GPU', 'gpus.sum': '{n} 张卡 · {r} 个配方', 'gpus.running': '运行中：{card}',
     'tip.rate': '每小时 CU —— {how}', 'tip.gvram': '显存', 'tip.gram': '内存',
     'how.measured': '实测', 'how.estimate': '估算',
     'model.label': '模型',
-    'status.verified': '已实测', 'status.unmeasured': '还没跑过', 'status.placeholder': '不可运行',
+    'status.verified': '已实测', 'status.unmeasured': '未端到端验证', 'status.placeholder': '不可运行',
     'fact.prefill_tps': 'Prefill', 'fact.decode_tps': 'Decode', 'fact.context': '上下文',
     'fact.vision': '视觉', 'fact.concurrency': '并发', 'fact.vram_mib': '显存',
     'fact.weights': '权重', 'fact.load_s': '载入', 'fact.eta_min': '就绪用时',
@@ -984,13 +986,14 @@ const I18N = {
     'confirm.stops': '{idle} 分間アイドルで自動停止、連続最長 {max} 時間。',
     'confirm.budget': '今月の予算 {budget} CU、残り {left}。起動後は約 {after} の見込み。',
     'confirm.balance': '現在の残高 {left} CU。起動後は約 {after} の見込み。',
-    'confirm.unmeasured': 'このレシピはまだ対象カードで実行されていません。時間・費用・速度は見積もりです。',
+    'confirm.unmeasured': '起動手順全体はまだエンドツーエンドで検証されていません。推定値とモデル単体の実測値を区別してください。',
+    'confirm.chat_only': 'Chat Completions のみ対応：このモデルサーバーに /v1/responses はありません（Codex Responses 非対応）。',
     'confirm.rate': 'このカードの CU レートは Colab の公表値で、アカウントから読んだ値ではありません。',
     'sec.gpus': '利用可能な GPU', 'gpus.sum': '{n} 枚 · レシピ {r} 件', 'gpus.running': '稼働中：{card}',
     'tip.rate': '1 時間あたりの CU —— {how}', 'tip.gvram': 'VRAM', 'tip.gram': 'メモリ',
     'how.measured': '実測', 'how.estimate': '見積もり',
     'model.label': 'モデル',
-    'status.verified': '実測済み', 'status.unmeasured': '未実行', 'status.placeholder': '実行不可',
+    'status.verified': '実測済み', 'status.unmeasured': '一連の起動は未検証', 'status.placeholder': '実行不可',
     'fact.prefill_tps': 'Prefill', 'fact.decode_tps': 'Decode', 'fact.context': 'コンテキスト',
     'fact.vision': 'ビジョン', 'fact.concurrency': '並列', 'fact.vram_mib': 'VRAM',
     'fact.weights': '重み', 'fact.load_s': 'ロード', 'fact.eta_min': '準備完了まで',
@@ -1568,6 +1571,7 @@ function confirmHTML(w) {
     + '<p class="usd">' + esc(t('confirm.usd', { usd: num(w.usd_per_hour, 2) })) + '</p>'
     + '<ul>'
     + (unmeasured ? '<li class="warn">' + esc(t('confirm.unmeasured')) + '</li>' : '')
+    + (w.chat_only ? '<li class="warn">' + esc(t('confirm.chat_only')) + '</li>' : '')
     + (w.rate_measured === false ? '<li class="warn">' + esc(t('confirm.rate')) + '</li>' : '')
     + '<li>' + esc(t('confirm.load', { need: num(w.cu_estimate, 1) })) + '</li>'
     + '<li>' + esc(t('confirm.stops', { idle: num(w.idle_stop_min, 0), max: num(w.max_session_h, 0) })) + '</li>'
@@ -1698,7 +1702,10 @@ function gpuHTML(g, locked) {
         + esc(x.model + ' · ' + (x.short || x.quant || '')) + '</option>').join('')
       + '</select>' + ico('chevron', 'r') + '</label>';
   }
-  if (r) h += factsHTML(r);
+  if (r) {
+    h += factsHTML(r);
+    if ((fact(r, 'responses_api') || {}).v === false) h += '<p class="fine">' + esc(t('confirm.chat_only')) + '</p>';
+  }
   const can = !!r && r.runnable && !locked;
   h += '<button type="button" class="btn' + (running ? ' primary' : '') + '" data-act="pick" data-r="'
     + esc(r ? r.id : '') + '"' + (can && !pending ? '' : ' disabled') + '>'

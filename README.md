@@ -23,8 +23,8 @@ You pay Google for the GPU only while it runs. collabosm itself is free and open
 4. Follow the **Colab** steps on the right: **Install**, then **Connect Google account**.
 5. Under **GPUs** press **Start**, then **Start — billing begins**. A few minutes later (about 6 for
    the default A100-40G recipe, 11 for the A100-80G) the panel says **Ready**: chat. The A100-40G
-   Strata recipe is the exception: allow up to its 40-minute estimate. Press **Stop** when you are
-   done.
+   Strata recipe is the exception: allow up to its 40-minute estimate. The experimental 80G
+   Maya-L option has a 110-minute first-run estimate. Press **Stop** when you are done.
 
 Every step is explained below.
 
@@ -173,7 +173,9 @@ Shortcut gone? `python frontend/shortcut.py` in the collabosm folder puts it bac
 ### Start a GPU
 
 1. In the **GPUs** section, each GPU card has a model menu. **A100-80G High-RAM with
-   Qwen3.8-Flash-Next** is the tested choice.
+   Qwen3.8-Flash-Next** is the tested choice. **GLM-5.3-Flash Maya-L** is also selectable on that
+   card as an experimental, text-only option; its complete collabosm launch has not yet been
+   verified end to end.
 2. Press **Start**. Nothing is rented yet: first you see what it will cost.
 
    ![What a start will cost, before anything is billed](docs/images/confirm-card.png)
@@ -182,7 +184,8 @@ Shortcut gone? `python frontend/shortcut.py` in the collabosm folder puts it bac
 4. Wait for **Ready**. The panel shows the steps — Request, Upload, Install, Load, Ready — and how
    far along it is. Time depends on the recipe: the A100-40G Strata recipe now builds its pinned
    engine from source and has a conservative 40-minute estimate (about 29 minutes from GPU
-   assignment in the 2026-10-09 trial).
+   assignment in the 2026-10-09 trial). The Maya-L first-run estimate is 110 minutes because its
+   156.3 GB pack must be downloaded and its engine built before the first load.
 
 Sometimes Colab hands out a smaller GPU than the model needs. collabosm notices within a minute,
 gives it back (about 0.13 compute units) and asks you to press **Start** again.
@@ -404,11 +407,13 @@ stand-in, see [docs/DEVELOPER.md](docs/DEVELOPER.md).)
 |---|---|---|---|---|---|
 | A100-40G (the default) | Qwen3.8-27B | measured once | 5.37 (Colab's figure) | $0.54 | ~6 min |
 | A100-80G High-RAM | Qwen3.8-Flash-Next | tested | 6.77 (Colab's own rate) | $0.68 | ~11 min |
+| A100-80G High-RAM | GLM-5.3-Flash Maya-L, text-only | experimental; direct model trial passed, full recipe not yet tested | 6.77 (Colab's own rate) | $0.68 | ~110 min estimate |
 | A100-40G | Qwen3.8-Flash-Next, on Strata v0.1.41 | tested | 5.37 (Colab's figure) | $0.54 | ~40 min estimate |
 
 - Compute units are Colab's currency: about $0.10 each when bought pay-as-you-go.
-- Loading counts too: about 1.8 compute units per start on the 80G GPU, which the cost card shows
-  before you confirm.
+- Loading counts too: about 1.8 compute units for the tested Qwen 80G recipe, but roughly 12–13
+  compute units are budgeted for a first Maya-L setup on the same card. The cost card shows the
+  estimate before you confirm; Colab bills actual time, not the estimate.
 - collabosm keeps a record of every session, and what it cost, in `.collabosm/ledger.json` in your
   home folder.
 
@@ -426,6 +431,18 @@ What you get:
   - Length: conversations up to about 500,000 tokens.
   - Pictures: understood.
   - Those speeds were measured with conversations up to 114,000 tokens.
+- **GLM-5.3-Flash Maya-L on the A100-80G High-RAM**
+  - Its routed experts are IQ3_S gate/up, IQ4_XS down and Q5_K for sensitive tensors; attention is
+    Q6_K. This is the Maya quant that satisfies the requested 3-bit-or-higher floor (Maya-S and
+    Maya-M have 2-bit components).
+  - A direct Project Maya v1.0.30 trial on the card read **1,084.1 tokens/s** for one uncached
+    11,515-token prompt and wrote **16.2 tokens/s** for 256 output tokens. One sample is not a
+    median. The pinned source build and four-shard 156.3 GB download took 76.8 minutes, plus
+    roughly 8 minutes for the first model load; the UI's 110-minute estimate allows for variance.
+  - Text chat only, configured for 32,768-token context. Vision and `/v1/responses` are **not**
+    provided by this recipe, so it is not a Codex Responses endpoint. The model's direct VM API
+    worked; the collabosm provision/tunnel path has offline tests but has not had a paid
+    end-to-end run. See [measurements](docs/MEASURED.md#project-maya-v1030-maya-l-on-a100-80g-high-ram-2026-10-10).
 - **Qwen3.8-Flash-Next on the A100-40G, with [Strata](https://github.com/Niko1221/Strata)**
   - The same model on the smaller, cheaper card: it does not fit there, so Strata keeps the parts
     it cannot hold on the GPU in the machine's memory and has the processor work them out.

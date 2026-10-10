@@ -69,7 +69,9 @@ least `{}`, and must not carry another site's `Origin` header; a command-line cl
   `python scripts/recipe.py list`.
 - A start moves `stage` through `requesting` → `uploading` → `bootstrapping` → `loading` → `ready`.
   Most recipes take about 6 to 11 minutes; the source-built A100-40G Strata v0.1.41 recipe has a
-  conservative 40-minute estimate (about 29 minutes from assignment in its trial).
+  conservative 40-minute estimate (about 29 minutes from assignment in its trial). The experimental
+  A100-80G Maya-L GLM-5.3-Flash text-only recipe has a 110-minute first-run estimate; its direct
+  GPU/model trial passed, but the collabosm launch/tunnel path is not yet end-to-end verified.
 - When something goes wrong, `note` and `log_tail` in the status say what.
 
 ## Use the model
@@ -82,11 +84,13 @@ While `stage` is `ready`:
 | API key | any value, for example `sk-local` or `local_key` from the status (what the page copies); the app replaces it with the real key |
 | model | the running one: `live_model` in the status, or `GET /v1/models` |
 
-- **Endpoints:** `/v1/chat/completions` and `/v1/responses` both work, streaming or not, with
-  tools, including Codex's `apply_patch` on the app's regular backend. Strata v0.1.41 passed chat,
+- **Endpoints:** for the regular backend, `/v1/chat/completions` and `/v1/responses` both work,
+  streaming or not, with tools, including Codex's `apply_patch`. Strata v0.1.41 passed chat,
   vision, function-tool round-trip, and Responses smoke checks; a full Codex `apply_patch` workflow
   on Strata has not been tested. Strata's Responses is stateless full-history (no response-ID
   retrieval/continuation, cancel, or compact operations).
+  **Exception:** the experimental Maya-L recipe currently exposes Chat Completions but not
+  `/v1/responses` or vision; do not select it for a Codex Responses client.
 - **Configuration:** Codex and ModelDock setup are in [README.md](README.md#5-use-the-model-in-other-programs).
 - **Use this address, not the tunnel.** Point programs here, not at the GPU's `….trycloudflare.com`
   address: that one changes with every GPU and needs the key.
